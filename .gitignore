@@ -1,0 +1,13 @@
+/target/
+.env
+.env.*
+!.env.example
+/config/guilds/*.toml
+/config/local*
+*.db
+*.db-*
+*.sqlite*
+*.log
+*.tmp
+.idea/
+.vscode/
