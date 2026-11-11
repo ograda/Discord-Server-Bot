@@ -13,10 +13,19 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
     let templates: std::path::PathBuf = std::env::var("TEMPLATE_DIR")
         .unwrap_or_else(|_| "templates".into())
         .into();
+    let catalog = crate::services::catalog::Catalog::new(&config);
     for guild in config.guilds.values() {
+        store.migrate_content(
+            guild.guild_id,
+            guild
+                .link_boards
+                .as_deref()
+                .and_then(|boards| boards.first()),
+        )?;
         let state = store.read(guild.guild_id)?;
         for kind in ["announcements", "rules", "links"] {
             crate::services::storage::template(&templates, guild, kind, &state)?;
+            tracing::info!(guild = %guild.guild_id, kind, source = %crate::services::storage::content_source(guild, kind, &state), "Fonte efetiva de conteúdo na inicialização");
         }
     }
     let framework = poise::Framework::builder()
@@ -46,13 +55,18 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
                         }
 
                         poise::FrameworkError::Command { ctx, error, .. } => {
-                            tracing::warn!(command = ctx.command().name, "Falha em comando administrativo");
-                            let message = if error.downcast_ref::<s::Error>().is_some() {
-                                "Falha na API Discord. Verifique as permissões. Se houve envio com resultado incerto, consulte o registro pending antes de repetir.".to_string()
-                            } else if error.downcast_ref::<std::io::Error>().is_some() || error.downcast_ref::<serde_json::Error>().is_some() {
-                                "Falha no armazenamento. Verifique o volume de dados e restaure um backup se necessário; não repita publicações antes de conferir o estado.".to_string()
-                            } else { error.to_string() };
+                            let message = super::diagnostics::failure(ctx, &error);
                             let _ = ctx.send(poise::CreateReply::default().content(message).ephemeral(true)).await;
+                        }
+
+                        poise::FrameworkError::ArgumentParse { ctx, .. } => {
+                            let error = anyhow::anyhow!("Falha de validação dos parâmetros. Use as escolhas da ação e, para avatar, o campo imagem do tipo Attachment. Se a interface estiver antiga, reabra o comando após o registro atualizado.");
+                            let message = super::diagnostics::failure(ctx, &error);
+                            let _ = ctx.send(poise::CreateReply::default().content(message).ephemeral(true)).await;
+                        }
+                        poise::FrameworkError::CommandStructureMismatch { ctx, description, .. } => {
+                            tracing::warn!(guild = ?ctx.interaction.guild_id, module = ctx.command.name, stage = "slash_schema", cause = description, "Registro slash incompatível com os parâmetros recebidos");
+                            let _ = poise::Context::Application(ctx).send(poise::CreateReply::default().content("O registro deste comando está desatualizado. Reinicie o bot atualizado para registrar os comandos da guilda e reabra o comando; avatar utiliza o parâmetro imagem do tipo Attachment.").ephemeral(true)).await;
                         }
 
                         other => {
@@ -91,8 +105,8 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
                             tracing::info!(alias = guild.alias.as_deref().unwrap_or("sem-alias"), guild = %id, command = name, reason, "Comando omitido");
                         }
                     }
-                    let commands = crate::config::availability::registered(guild, config.global.modules);
-                    if let Err(error) = poise::builtins::register_in_guild(ctx, &commands, *id).await {
+                    let commands = crate::config::availability::remote_commands(guild, config.global.modules);
+                    if let Err(error) = id.set_commands(&ctx.http, commands).await {
                         tracing::error!(guild = %id, "Falha no registro remoto de comandos");
                         if guild.enabled { return Err(error.into()); }
                         // A disabled guild may no longer have the bot installed.
@@ -103,6 +117,7 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
                     tracing::info!(guild = %id, "Comandos registrados");
                 }
                 Ok(Data {
+                    catalog,
                     profile_client,
                     store,
                     templates,

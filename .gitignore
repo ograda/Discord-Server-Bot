@@ -14,5 +14,7 @@
 *.sqlite*
 *.log
 *.tmp
+*.backup-*.bak
+*.json.bak
 .idea/
 .vscode/

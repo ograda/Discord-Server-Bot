@@ -1,5 +1,5 @@
 pub mod availability;
-mod loader;
+pub(crate) mod loader;
 pub mod migration;
 pub mod registry;
 pub use loader::load;
@@ -58,7 +58,13 @@ pub struct GuildConfig {
     #[serde(skip)]
     pub commands: HashMap<String, bool>,
     #[serde(skip)]
+    pub actions: HashMap<String, HashMap<String, bool>>,
+    #[serde(skip)]
+    pub link_boards: Option<Vec<crate::services::catalog::Board>>,
+    #[serde(skip)]
     pub contents: HashMap<String, crate::services::content::Document>,
+    #[serde(skip)]
+    pub content_sources: HashMap<String, String>,
     #[serde(default)]
     pub templates: HashMap<String, String>,
     pub modules: Option<Modules>,
@@ -101,6 +107,7 @@ impl Default for Messaging {
 
 #[derive(Debug)]
 pub struct Config {
+    pub root: std::path::PathBuf,
     pub global: GlobalConfig,
     pub guilds: HashMap<GuildId, GuildConfig>,
 }

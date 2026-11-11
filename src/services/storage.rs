@@ -16,12 +16,72 @@ pub struct Publication {
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct State {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archived_documents: Vec<ArchivedDocument>,
     #[serde(default)]
     pub profile: crate::services::profile::ProfileState,
     pub revision: u64,
     pub documents: HashMap<String, Document>,
     pub publications: HashMap<String, Publication>,
     pub pending: Option<String>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ArchivedDocument {
+    pub key: String,
+    pub document: Document,
+    pub revision: u64,
+}
+impl State {
+    /// Remove only the rules override. Publication references and other guild content survive.
+    pub fn reset_rules(&mut self) -> Result<bool> {
+        ensure!(
+            self.pending.is_none(),
+            "Existe operação pendente; confira o registro antes de resetar as regras"
+        );
+        let removed = if let Some(document) = self.documents.remove("rules") {
+            self.archived_documents.push(ArchivedDocument {
+                key: "rules".into(),
+                document,
+                revision: self.revision,
+            });
+            true
+        } else {
+            false
+        };
+        if removed {
+            self.revision += 1;
+        }
+        Ok(removed)
+    }
+}
+
+pub fn content_source(guild: &crate::config::GuildConfig, kind: &str, state: &State) -> String {
+    if !["rules", "links"].contains(&kind) && state.documents.contains_key(kind) {
+        format!(
+            "JSON persistido da guilda {} (prioridade sobre TOML)",
+            guild.guild_id
+        )
+    } else {
+        guild
+            .content_sources
+            .get(kind)
+            .cloned()
+            .unwrap_or_else(|| "templates legados".into())
+    }
+}
+
+/// A publication is a reference, not a customization. Do not freeze TOML on publish.
+pub fn remember_publication_content(
+    state: &mut State,
+    key: &str,
+    doc: &Document,
+    baseline: &Document,
+) {
+    let _ = baseline;
+    if key == "rules" || key == "links" || key.starts_with("links:") {
+        return;
+    }
+    state.documents.insert(key.into(), doc.clone());
 }
 pub struct Store {
     root: PathBuf,
@@ -60,6 +120,58 @@ impl Store {
             Err(e) => Err(e.into()),
         }
     }
+    /// Preserve the exact old JSON before archiving obsolete content overrides.
+    pub fn migrate_content(
+        &self,
+        guild: GuildId,
+        first_board: Option<&crate::services::catalog::Board>,
+    ) -> Result<bool> {
+        let mut state = self.read(guild)?;
+        let keys: Vec<_> = state
+            .documents
+            .keys()
+            .filter(|k| k.as_str() == "rules" || k.as_str() == "links" || k.starts_with("links:"))
+            .cloned()
+            .collect();
+        let board_key = first_board.map(|b| b.publication_key());
+        let move_links = board_key.as_ref().is_some_and(|key| {
+            key != "links"
+                && state.publications.contains_key("links")
+                && !state.publications.contains_key(key)
+        });
+        if keys.is_empty() && !move_links {
+            return Ok(false);
+        }
+        ensure!(
+            state.pending.is_none(),
+            "Migração de conteúdo bloqueada por operação pendente; reconcilie a guilda antes de iniciar"
+        );
+        let path = self.path(guild);
+        let original = fs::read(&path)?;
+        let mut backup = tempfile::Builder::new()
+            .prefix("state.pre-toml-")
+            .suffix(".json.bak")
+            .tempfile_in(path.parent().unwrap())?;
+        backup.write_all(&original)?;
+        backup.as_file().sync_all()?;
+        backup.keep().map_err(|e| e.error)?;
+        for key in keys {
+            let document = state.documents.remove(&key).unwrap();
+            state.archived_documents.push(ArchivedDocument {
+                key,
+                document,
+                revision: state.revision,
+            });
+        }
+        if move_links {
+            let publication = state.publications.remove("links").unwrap();
+            state.publications.insert(board_key.unwrap(), publication);
+        }
+        state.revision += 1;
+        self.write(guild, &state)?;
+        tracing::info!(%guild, stage = "migration", "Conteúdo JSON legado preservado em backup e arquivo; TOML passa a ser a fonte");
+        Ok(true)
+    }
     // Chamadores devem manter gate adquirido durante read/modify/write e efeitos HTTP.
     pub fn write(&self, guild: GuildId, state: &State) -> Result<()> {
         let path = self.path(guild);
@@ -79,7 +191,11 @@ pub fn template(
     kind: &str,
     state: &State,
 ) -> Result<Document> {
-    if let Some(doc) = state.documents.get(kind) {
+    if let Some(doc) = state
+        .documents
+        .get(kind)
+        .filter(|_| !["rules", "links"].contains(&kind))
+    {
         return Ok(doc.clone());
     }
     if let Some(doc) = guild.contents.get(kind) {

@@ -1,8 +1,10 @@
-use crate::core::{Context, Error, permissions};
-use anyhow::ensure;
+use crate::{
+    core::{Context, Error, permissions},
+    services::{announcements, publishing, storage},
+};
 use poise::serenity_prelude as s;
 
-/// Publica um anúncio no canal permitido na configuração.
+/// Envia um embed rápido; canal ausente utiliza announcements da guilda.
 #[poise::command(
     slash_command,
     guild_only,
@@ -11,38 +13,40 @@ use poise::serenity_prelude as s;
 )]
 pub async fn announce(
     ctx: Context<'_>,
-    #[description = "Canal de anúncios autorizado"] channel: s::GuildChannel,
-    #[description = "Texto do anúncio (até 2000 caracteres)"] content: String,
+    #[description = "Mensagem do anúncio"] mensagem: String,
+    #[description = "Canal de destino; padrão: announcements configurado"] canal: Option<
+        s::GuildChannel,
+    >,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
     let cfg = permissions::guild_config(ctx)?;
-    ensure!(
-        cfg.modules
-            .unwrap_or(ctx.data().config.global.modules)
-            .messaging
-            && cfg.messaging.enabled,
-        "Mensagens desabilitadas"
-    );
-    ensure!(
-        Some(channel.id) == cfg.channels.announcements && channel.guild_id == cfg.guild_id,
-        "Canal não autorizado"
-    );
-    ensure!(
-        !content.trim().is_empty() && content.chars().count() <= 2000,
-        "Conteúdo deve ter entre 1 e 2000 caracteres"
-    );
-    let (_, revision) = crate::services::publishing::load(ctx, "announcements").await?;
-    let doc = crate::services::content::Document {
-        text: content,
-        ..Default::default()
+    let channel = match canal {
+        Some(channel) => {
+            anyhow::ensure!(
+                channel.guild_id == cfg.guild_id,
+                "Canal não pertence à guilda atual"
+            );
+            channel.id
+        }
+        None => cfg.channel("announcements")?,
     };
-    crate::services::publishing::preview(
-        ctx,
+    publishing::authorize_channel(ctx, "announcements", channel, true).await?;
+    let base = storage::template(
+        &ctx.data().templates,
+        cfg,
         "announcements",
-        format!("announcement-{}", ctx.id()),
-        doc,
-        revision,
-        false,
-    )
-    .await
+        &Default::default(),
+    )?;
+    let doc = announcements::with_message(&base, &mensagem)?;
+    let message = channel
+        .send_message(
+            ctx.http(),
+            s::CreateMessage::new()
+                .embeds(doc.embeds("announcements")?)
+                .allowed_mentions(s::CreateAllowedMentions::new()),
+        )
+        .await?;
+    tracing::info!(guild = %cfg.guild_id, module = "announce", action = "send", stage = "complete", channel = %channel, message = %message.id, "Anúncio rápido enviado como embed");
+    ctx.say(format!("Anúncio enviado em <#{channel}>.")).await?;
+    Ok(())
 }

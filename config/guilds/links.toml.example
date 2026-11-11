@@ -1,0 +1,27 @@
+# Copie para config/guilds/<nome>/links.toml.
+# O array boards específico substitui o array compartilhado por inteiro.
+[[boards]]
+id = "importantes"
+title = "🔗 Links Importantes"
+channel = "links" # alias de canal de config.toml, nunca Message ID
+color = 5793266
+
+[[boards.links]]
+id = "discord"
+title = "Convite da Comunidade"
+url = "https://discord.gg/XnxQ9q9VB"
+description = "Convide seus amigos para o servidor."
+emoji = "🎮"
+
+[[boards.links]]
+id = "warcraftlogs"
+title = "Warcraft Logs"
+url = "https://www.warcraftlogs.com/"
+description = "Logs e análises das raids."
+emoji = "📊"
+
+[[boards]]
+id = "guias"
+title = "📚 Guias e Recursos"
+channel = "links"
+color = 5793266

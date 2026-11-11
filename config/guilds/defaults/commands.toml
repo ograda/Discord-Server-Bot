@@ -1,30 +1,43 @@
-# Entradas ausentes são habilitadas por padrão, respeitando o módulo.
+# Ausências herdam os defaults; flags de ação nunca reabilitam um módulo.
 [commands]
-"profile.show" = true
-"profile.nickname" = true
-"profile.avatar" = true
-"profile.bio" = true
-"profile.apply" = true
 ping = true
-status = true
+role = true
+rules = true
+links = true
+announcement = true
 announce = true
-"role.add" = true
-"role.remove" = true
-"announcements.create" = true
-"announcements.edit" = true
-"announcements.list" = true
-"announcements.delete" = true
-"rules.preview" = true
-"rules.publish" = true
-"rules.update" = true
-"rules.edit" = true
-"rules.add" = true
-"rules.remove" = true
-"rules.list" = true
-"links.preview" = true
-"links.publish" = true
-"links.update" = true
-"links.edit" = true
-"links.add" = true
-"links.remove" = true
-"links.list" = true
+profile = true
+
+[actions.ping]
+simples = true
+status = true
+
+[actions.role]
+add = true
+remove = true
+
+[actions.rules]
+preview = true
+publish = true
+update = true
+reset = true
+remove = true
+
+[actions.links]
+preview = true
+publish = true
+update = true
+reset = true
+add = true
+remove = true
+
+[actions.announcement]
+create = true
+edit = true
+remove = true
+
+[actions.profile]
+revert = true
+nickname = true
+bio = true
+avatar = true

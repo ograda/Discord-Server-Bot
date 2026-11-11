@@ -1,0 +1,18 @@
+# Copie para config/guilds/<nome>/rules.toml.
+# Update relê este arquivo; Publish exige confirmação para atualizar a mensagem.
+title = "📜 Regras da Comunidade"
+description = "Bem-vindo! Respeite os demais participantes."
+color = 5793266
+footer = "Em caso de dúvida, procure a moderação."
+
+[[entries]]
+id = "respeito"
+title = "Respeito"
+description = "Trate todos com respeito."
+order = 1
+
+[[entries]]
+id = "organizacao"
+title = "Organização"
+description = "Use cada canal para sua finalidade."
+order = 2

@@ -2,6 +2,76 @@ use super::storage::State;
 use anyhow::{Result, bail, ensure};
 use poise::serenity_prelude::{GuildId, MessageId};
 
+pub fn with_message(
+    base: &super::content::Document,
+    message: &str,
+) -> Result<super::content::Document> {
+    ensure!(
+        !message.trim().is_empty(),
+        "Mensagem do anúncio não pode ser vazia"
+    );
+    let mut doc = base.clone();
+    doc.text.clear();
+    doc.description = message.into();
+    ensure!(
+        !doc.embeds("announcements")?.is_empty(),
+        "Anúncio deve produzir um embed"
+    );
+    Ok(doc)
+}
+pub fn resolve_in_guild(state: &State, guild: GuildId, input: &str) -> Result<String> {
+    if input.trim().starts_with("https://") {
+        let url = url::Url::parse(input.trim())?;
+        ensure!(
+            matches!(
+                url.host_str(),
+                Some("discord.com" | "www.discord.com" | "canary.discord.com" | "ptb.discord.com")
+            ) && url.query().is_none()
+                && url.fragment().is_none(),
+            "Use o link de uma mensagem Discord gerenciada"
+        );
+        let parts: Vec<_> = url.path().trim_matches('/').split('/').collect();
+        ensure!(
+            parts.len() == 4 && parts[0] == "channels" && parts[1] == guild.to_string(),
+            "Link de mensagem não pertence à guilda atual"
+        );
+        let key = resolve(state, parts[3])?;
+        ensure!(
+            state.publications[&key].channel.to_string() == parts[2],
+            "Canal do link não corresponde à publicação registrada"
+        );
+        return Ok(key);
+    }
+    resolve(state, input)
+}
+pub fn choices(state: &State, partial: &str) -> Vec<poise::serenity_prelude::AutocompleteChoice> {
+    let mut keys: Vec<_> = state
+        .publications
+        .keys()
+        .filter(|k| k.starts_with("announcement-"))
+        .collect();
+    keys.sort();
+    keys.into_iter()
+        .filter(|k| {
+            k.contains(partial)
+                || state.publications[*k].message.to_string().contains(partial)
+                || summary(state, k)
+                    .to_lowercase()
+                    .contains(&partial.to_lowercase())
+        })
+        .take(25)
+        .map(|key| {
+            poise::serenity_prelude::AutocompleteChoice::new(
+                format!("{} — {key}", summary(state, key))
+                    .chars()
+                    .take(100)
+                    .collect::<String>(),
+                key.clone(),
+            )
+        })
+        .collect()
+}
+
 pub fn new_id(interaction: u64) -> String {
     format!("announcement-{interaction}")
 }
@@ -12,7 +82,7 @@ pub fn resolve(state: &State, input: &str) -> Result<String> {
     if input.starts_with("announcement-") {
         ensure!(
             state.publications.contains_key(input),
-            "Anúncio não encontrado nesta guilda. Use /announcements list ou o autocomplete."
+            "Anúncio não encontrado nesta guilda. Use a seleção ou o autocomplete de /announcement."
         );
         ensure!(
             state.documents.contains_key(input),
@@ -27,7 +97,7 @@ pub fn resolve(state: &State, input: &str) -> Result<String> {
         .map(MessageId::new);
     let Some(id) = id else {
         bail!(
-            "Informe a chave announcement-… ou um Message ID numérico listado por /announcements list."
+            "Informe a chave announcement-… ou um Message ID numérico associado à seleção de /announcement."
         );
     };
     let matches: Vec<_> = state
@@ -41,7 +111,7 @@ pub fn resolve(state: &State, input: &str) -> Result<String> {
     );
     let Some((key, _)) = matches.first() else {
         bail!(
-            "Message ID não associado a anúncio gerenciado nesta guilda. Use /announcements list."
+            "Message ID não associado a anúncio gerenciado nesta guilda. Use a seleção de /announcement."
         );
     };
     ensure!(

@@ -1,4 +1,12 @@
-# Copie para config/guilds/<name>/commands.toml.
+# Copie para config/guilds/<nome>/commands.toml; inclua somente diferenças.
 [commands]
-"rules.publish" = false
-"announcements.delete" = false
+# rules = false # desabilita o comando inteiro nesta guilda
+
+[actions.rules]
+publish = false
+
+[actions.announcement]
+remove = false
+
+# Se preview estiver desabilitado, /rules sem ação será rejeitado.
+# Escolha explicitamente outra ação habilitada; o bot não troca o padrão.

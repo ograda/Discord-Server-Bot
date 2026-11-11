@@ -1,3 +1,7 @@
+> Registro histórico da estabilização anterior. A interface e a precedência atuais
+> foram substituídas pela refatoração descrita em [V1.1](v1.1.md) e no
+> [guia de comandos](commands.md): Update recarrega, Publish publica e Reset restaura TOML.
+
 # Estabilização V1.1 e perfil por guilda
 
 ## Diagnóstico e correções
@@ -166,3 +170,77 @@ no Windows. Os comandos Cargo foram concluídos com
 Encerre a instância antiga antes de iniciar a nova; não execute duas instâncias
 compartilhando o mesmo diretório de dados. O novo registro remoto e os efeitos dos
 comandos só serão homologados depois dessa reinicialização.
+
+## Complemento: Rules e Profile Avatar (11/11/2026)
+
+Investigação de Rules:
+
+- O TOML é carregado na inicialização e fica em memória. Em configuração
+  registrada, `guilds/defaults/rules.toml` fornece a base e o arquivo da pasta
+  da guilda sobrepõe campos. Arrays, incluindo `entries`, são substituídos
+  integralmente. Alterações no disco exigem reinicialização.
+- `state.json`, separado por Guild ID, tem prioridade sobre esse conteúdo.
+  A causa encontrada foi que publicar regras também persistia uma cópia do
+  TOML em `documents.rules`, congelando o conteúdo efetivo nas próximas partidas.
+  Agora publicar o TOML sem alterações mantém somente a referência da publicação;
+  edições e rascunhos explícitos continuam sendo personalizações persistidas.
+  Personalizações existentes não são migradas nem apagadas automaticamente.
+- `/rules edit` abre formulário e depois confirmação. Salvar rascunho salva
+  somente no JSON; Confirmar / Publicar salva e publica; cancelar ou expirar
+  não salva a edição. As respostas explicam o resultado.
+- `/rules preview` lê o conteúdo efetivo sem salvar ou publicar. `/rules update`
+  usa essa mesma seleção e exige confirmação antes de editar a mensagem existente.
+  A origem aparece nos diagnósticos, nas respostas dos comandos e no startup.
+- A atualização recupera a mensagem pelo canal/ID persistidos e verifica autoria,
+  guilda, permissões e canal configurado antes de editar. Para regras, uma resposta
+  404 agora preserva os IDs e informa o problema; não cria mensagem substituta.
+- `/rules reset` pede confirmação vinculada ao autor, expira em 90 segundos e
+  revalida autorização e revisão. Remove somente `documents.rules` da guilda atual.
+  Publicações, demais documentos, perfil e outras guildas são preservados.
+  Operação pendente bloqueia reset. Reset não publica e não relê TOML do disco.
+
+Para voltar ao TOML: reinicie com os arquivos desejados, execute `/rules reset`
+e confirme, confira `/rules preview`, execute `/rules update` e confirme.
+O ID original é mantido. Não apague o `state.json`.
+
+Investigação de Avatar:
+
+- O endpoint já era o oficial: `PATCH /guilds/{guild.id}/members/@me`, com
+  `avatar` contendo uma Data URI Base64. O token retornado por Serenity já contém
+  o prefixo de autorização. Não foi identificada necessidade de trocar de endpoint.
+- 1254 × 1254 está dentro do limite local de 4096 × 4096. Sem o anexo original
+  e a resposta HTTP da tentativa, não é possível atribuir sua falha às dimensões.
+  Os testes confirmam decodificação e preservação de PNG válido nesse tamanho.
+- O download continua restrito a anexos HTTPS do Discord, sem redirects e sem
+  enviar o token ao CDN. Valida status, limite de bytes durante a leitura e
+  correspondência com o tamanho declarado. Erros de transporte não expõem URLs.
+- A validação compara MIME declarado com formato detectado pelos bytes, aceita
+  MIME ausente ou `application/octet-stream` e realiza decodificação limitada.
+  MIME HTTP, bytes, dimensões reais, formato de saída e normalização são
+  diagnosticados; MIME HTTP desconhecido não é ecoado livremente nos logs.
+- `/profile avatar image:<anexo>` preserva dimensões/formato. A opção
+  `normalize:true` converte explicitamente para PNG 512 × 512, com proporção
+  preservada e margens transparentes. PNG já 512 × 512 é mantido byte a byte.
+  GIF normalizado passa a ser estático, informado ao usuário. Não há retry com
+  redimensionamento silencioso após rejeição do Discord.
+- Os diagnósticos distinguem validação, processamento, download e HTTP. Registram
+  rota sem segredos, campos presentes, tamanho do JSON, status e código numérico
+  Discord, além dos campos conhecidos rejeitados (`avatar`, `nick`, `bio`).
+  Corpos livres da resposta são omitidos porque podem repetir dados fornecidos.
+  Tokens e imagens Base64 não são registrados.
+- Sucesso HTTP sem hash de avatar da guilda não é tratado como aplicação
+  confirmada. A persistência continua ocorrendo somente após sucesso confirmado;
+  falha no disco depois do HTTP informa possível aplicação remota sem estado salvo.
+
+Validação automatizada deste complemento: `cargo test --offline` passou com 47
+testes. Inclui reinicialização, defaults/sobreposição/JSON/reset, referências e
+isolamento, PNG 512/1254, normalização proporcional, MIME, falha de decodificação,
+download e limites, respostas redigidas e uma troca HTTP local real via reqwest
+verificando rota por guilda, autorização, JSON e respostas 200/400/401/403/500.
+Os testes anteriores de cooldown 429, persistência e outros módulos permanecem.
+
+Homologação remota ainda necessária após reinicialização e novo registro dos
+comandos: envie PNG 512 × 512, confira `/profile show` e a aparência do bot na
+guilda, reinicie e confirme persistência; repita na segunda guilda para conferir
+isolamento. Teste também 1254 × 1254 com e sem `normalize:true`. Nenhum desses
+efeitos reais foi executado pelos testes locais.

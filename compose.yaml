@@ -8,6 +8,8 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - ./config:/app/config:ro
+      - ./config/guilds:/app/config/guilds:rw
+      - ./config/guilds/defaults:/app/config/guilds/defaults:ro
       - bot-data:/app/data
     restart: unless-stopped
     init: true

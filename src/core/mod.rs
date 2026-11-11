@@ -1,5 +1,6 @@
 pub mod bot;
 pub mod commands;
+pub mod diagnostics;
 pub mod permissions;
 
 use crate::config::Config;
@@ -7,6 +8,7 @@ use std::time::Instant;
 pub type Error = anyhow::Error;
 pub type Context<'a> = poise::Context<'a, Data, Error>;
 pub struct Data {
+    pub catalog: crate::services::catalog::Catalog,
     pub profile_client: crate::services::profile::Client,
     pub store: crate::services::storage::Store,
     pub templates: std::path::PathBuf,

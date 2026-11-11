@@ -3,6 +3,32 @@ use crate::config::GuildConfig;
 use anyhow::{Context as _, ensure};
 use poise::serenity_prelude as s;
 
+pub fn action(ctx: Context<'_>, root: &str, action: &str) -> Result<(), Error> {
+    let guild = guild_config(ctx)?;
+    guild.select_action(root, Some(action), ctx.data().config.global.modules)?;
+    tracing::info!(guild = %guild.guild_id, module = root, command = ctx.command().qualified_name, action, stage = "authorization", "Ação selecionada");
+    Ok(())
+}
+
+pub fn conditional_parameters(root: &str, action: &str, supplied: &[&str]) -> Result<(), Error> {
+    let allowed: &[&str] = match (root, action) {
+        ("links", "preview" | "publish" | "remove") => &["quadro"],
+        ("links", "add") => &["quadro", "id", "titulo", "url", "descricao", "emoji"],
+        ("announcement", "create") => &["mensagem"],
+        ("announcement", "edit") => &["identificador", "mensagem"],
+        ("announcement", "remove") => &["identificador"],
+        ("profile", "nickname") => &["apelido"],
+        ("profile", "bio") => &["biografia"],
+        ("profile", "avatar") => &["imagem", "normalizar"],
+        _ => &[],
+    };
+    ensure!(
+        supplied.iter().all(|p| allowed.contains(p)),
+        "Parâmetro incompatível com a ação {action}; remova os campos de outras ações"
+    );
+    Ok(())
+}
+
 pub fn guild_config(ctx: Context<'_>) -> Result<&GuildConfig, Error> {
     let id = ctx
         .guild_id()

@@ -223,23 +223,26 @@ fn validates_links_and_suppresses_mentions() {
 
 #[test]
 fn slash_groups_expose_all_expected_operations() {
-    use discord_server_bot::modules::content_commands;
-    for command in [content_commands::rules(), content_commands::links()] {
-        let names: Vec<_> = command
-            .subcommands
-            .iter()
-            .map(|c| c.name.as_str())
-            .collect();
-        for expected in [
-            "preview", "publish", "update", "list", "add", "edit", "remove",
-        ] {
-            assert!(names.contains(&expected));
+    use discord_server_bot::core::commands;
+    let commands = commands::all();
+    assert_eq!(commands.len(), 7);
+    for command in commands {
+        if command.name == "role" {
+            assert_eq!(command.subcommands.len(), 2);
+        } else {
+            assert!(command.subcommands.is_empty());
+            assert!(command.ephemeral);
+            if command.name != "announce" {
+                assert!(
+                    command
+                        .parameters
+                        .iter()
+                        .any(|p| !p.required && !p.choices.is_empty())
+                );
+            }
         }
-        assert!(command.subcommands.iter().all(|c| c.ephemeral));
     }
-    assert_eq!(content_commands::announcements().subcommands.len(), 4);
 }
-
 #[test]
 fn publication_records_survive_atomic_replacement() {
     use discord_server_bot::services::storage::Publication;
@@ -301,7 +304,7 @@ fn template_priority_partial_overrides_and_isolation() {
         template(dir.path(), &guild(1, "one"), "rules", &state)
             .unwrap()
             .title,
-        "Persistido"
+        "One" // TOML is authoritative; legacy JSON is archived at startup.
     );
     assert!(
         template(

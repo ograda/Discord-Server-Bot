@@ -1,0 +1,7 @@
+# Estilo utilizado por /announcement e /announce.
+title = "📢 Anúncio"
+description = "Escreva o conteúdo do anúncio."
+color = 5793266
+footer = "Equipe da comunidade"
+# thumbnail = "https://example.org/logo.png"
+# image = "https://example.org/banner.png"

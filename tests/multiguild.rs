@@ -1,6 +1,109 @@
 use discord_server_bot::config::{self, registry::folder_key};
 use std::fs;
 const BASE: &str = "app_name='Test'\nlog_level='info'\n[modules]\nadministration=true\nmessaging=false\nroles=true\n";
+
+#[test]
+fn rules_restart_override_reset_and_publish_preserve_guild_references() {
+    use discord_server_bot::services::{
+        content::Document,
+        storage::{self, Publication, State, Store},
+    };
+    use poise::serenity_prelude as s;
+    let dir = fixture(TWO);
+    write(
+        &dir,
+        "guilds/defaults/rules.toml",
+        "title='Default v1'\ndescription='Inherited'",
+    );
+    write(&dir, "guilds/O Acordo/rules.toml", "title='Guild v1'");
+    let initial = config::load(dir.path()).unwrap();
+    let one = initial.guild("one").unwrap();
+    let two = initial.guild("two").unwrap();
+    let mut state = State::default();
+    let doc = storage::template(dir.path(), one, "rules", &state).unwrap();
+    assert_eq!(doc.title, "Guild v1");
+    assert_eq!(doc.description, "Inherited");
+    let source = storage::content_source(one, "rules", &state);
+    assert!(source.contains("defaults") && source.contains("O Acordo"));
+    storage::remember_publication_content(&mut state, "rules", &doc, &doc);
+    assert!(!state.documents.contains_key("rules")); // Plain publish must not freeze TOML.
+    state.publications.insert(
+        "rules".into(),
+        Publication {
+            channel: s::ChannelId::new(10),
+            message: s::MessageId::new(20),
+        },
+    );
+    let store = Store::open(dir.path().join("state")).unwrap();
+    store.write(one.guild_id, &state).unwrap();
+    store.write(two.guild_id, &state).unwrap();
+    let other = fs::read(dir.path().join("state/guilds/2/state.json")).unwrap();
+
+    write(
+        &dir,
+        "guilds/defaults/rules.toml",
+        "title='Default v2'\ndescription='Inherited v2'",
+    );
+    write(&dir, "guilds/O Acordo/rules.toml", "title='Guild v2'");
+    assert_eq!(
+        storage::template(dir.path(), one, "rules", &state)
+            .unwrap()
+            .title,
+        "Guild v1"
+    );
+    let restarted = config::load(dir.path()).unwrap();
+    let one = restarted.guild("one").unwrap();
+    let baseline = storage::template(dir.path(), one, "rules", &state).unwrap();
+    assert_eq!(baseline.title, "Guild v2");
+    assert_eq!(baseline.description, "Inherited v2");
+    assert_eq!(
+        restarted.guild("two").unwrap().contents["rules"].title,
+        "Default v2"
+    );
+    let mut edited = baseline.clone();
+    edited.title = "Edited in Discord".into();
+    storage::remember_publication_content(&mut state, "rules", &edited, &baseline);
+    assert!(!state.documents.contains_key("rules"));
+    state.documents.insert("rules".into(), edited.clone()); // Legacy state from older versions.
+    state.documents.insert(
+        "links".into(),
+        Document {
+            title: "Links".into(),
+            ..Default::default()
+        },
+    );
+    state.profile.nickname = Some("Bot".into());
+    store.write(one.guild_id, &state).unwrap();
+    let mut state = store.read(one.guild_id).unwrap();
+    assert!(!storage::content_source(one, "rules", &state).contains("JSON"));
+    assert_eq!(
+        storage::template(dir.path(), one, "rules", &state)
+            .unwrap()
+            .title,
+        baseline.title
+    );
+    state.pending = Some("rules:operation".into());
+    assert!(state.reset_rules().is_err());
+    assert!(state.documents.contains_key("rules"));
+    state.pending = None;
+    assert!(state.reset_rules().unwrap());
+    assert!(!state.reset_rules().unwrap());
+    assert_eq!(state.profile.nickname.as_deref(), Some("Bot"));
+    assert_eq!(state.documents["links"].title, "Links");
+    assert_eq!(state.publications["rules"].channel.get(), 10);
+    assert_eq!(state.publications["rules"].message.get(), 20);
+    assert_eq!(
+        storage::template(dir.path(), one, "rules", &state)
+            .unwrap()
+            .title,
+        "Guild v2"
+    );
+    store.write(one.guild_id, &state).unwrap();
+    assert_eq!(
+        fs::read(dir.path().join("state/guilds/2/state.json")).unwrap(),
+        other
+    );
+}
 fn fixture(registry: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("guilds/defaults")).unwrap();
@@ -140,8 +243,8 @@ fn command_defaults_merge_and_empty_groups_disappear() {
     let config = config::load(dir.path()).unwrap();
     let one = config.guild("one").unwrap();
     let two = config.guild("two").unwrap();
-    assert!(one.command_enabled("status", config.global.modules));
-    assert!(!two.command_enabled("status", config.global.modules));
+    assert!(one.command_enabled("ping.status", config.global.modules));
+    assert!(!two.command_enabled("ping.status", config.global.modules));
     let commands = config::availability::registered(one, config.global.modules);
     assert!(!commands.iter().any(|c| c.name == "role"));
     let payload = poise::builtins::create_application_commands(&commands);
@@ -179,7 +282,7 @@ fn renaming_folder_keeps_persisted_content_by_id() {
         template(dir.path(), config.guild("one").unwrap(), "rules", &state)
             .unwrap()
             .title,
-        "Persisted"
+        config.guild("one").unwrap().contents["rules"].title
     );
 }
 

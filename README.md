@@ -4,36 +4,39 @@ Bot privado para administrar 2–3 servidores próprios, com código-fonte públ
 Monólito modular em Rust, desenvolvido no Windows e preparado para VPS Linux.
 O objetivo é evoluir administração, automações e integrações incrementalmente.
 
-## V1.1
+## V1.1 — interface simplificada
 
-Consulte também o [guia de estabilização e perfil por guilda](docs/stabilization-profile.md)
-para identificadores de anúncios, diagnóstico de comandos ausentes e homologação.
-O módulo opcional `/profile show/nickname/avatar/bio/apply` altera somente o perfil
-do bot no servidor atual. Exige Gerenciar Servidor para o usuário e, ao alterar
-o apelido, Alterar Apelido para o bot. Personalizações ficam no JSON da guilda.
+Sete comandos raiz, com escolhas nativas opcionais em `ação`. Apenas `/role`
+usa subcomandos reais. As respostas administrativas são efêmeras.
 
-Anúncios por formulário, regras em embeds, catálogo de links e prévias privadas.
-Consulte o [guia V1.1](docs/v1.1.md) para migração, comandos completos, templates,
-persistência JSON, recuperação e homologação.
-O registro central, defaults compartilhados e comandos independentes estão no
-[guia multiguild](docs/multiguild.md). TOMLs são carregados somente na inicialização.
-
-| Comando | Função | Permissão do usuário |
+| Comando | Sem selecionar ação | Outras operações |
 |---|---|---|
-| `/ping` | Confirma disponibilidade | Servidor autorizado |
-| `/status` | Versão, estado e uptime | Servidor autorizado |
-| `/announce channel content` | Publica texto no canal configurado | Gerenciar mensagens |
-| `/role add member role` | Adiciona cargo | Gerenciar cargos |
-| `/role remove member role` | Remove cargo | Gerenciar cargos |
-| `/announcements create/edit/list/delete` | Gerencia anúncios com prévia | Gerenciar mensagens |
-| `/rules preview/publish/update/edit/add/remove/list` | Gerencia regras | Gerenciar mensagens |
-| `/links preview/publish/update/edit/add/remove/list` | Gerencia links | Gerenciar mensagens |
+| `/ping` | Pong | `modo:status` (versão, uptime, conexão e execução) |
+| `/role` | Nenhuma operação | `add`, `remove` como subcomandos |
+| `/rules` | Prévia privada | `ação:publish`, `update`, `reset`, `remove` |
+| `/links` | Prévia do quadro; menu se houver vários | `ação:publish`, `update`, `reset`, `add`, `remove` |
+| `/announcement` | Criar anúncio por mensagem ou formulário | `ação:edit`, `remove`; seleção/autocomplete |
+| `/announce` | Envia embed para announcements | `mensagem` obrigatória, `canal` opcional |
+| `/profile` | Confirma restauração do perfil TOML | `ação:nickname`, `bio`, `avatar` |
 
-Comandos administrativos exigem também cargo moderador configurado, quando a lista
-não estiver vazia. O dono do servidor dispensa essas restrições pessoais.
-O bot verifica suas próprias permissões, permissões do canal e hierarquias.
-Anúncios não geram menções a usuários, cargos, `@everyone` ou `@here`.
-Respostas dos comandos são efêmeras. Não há comandos prefixados.
+**Update recarrega TOML em memória; Publish exige confirmação para modificar o
+Discord.** Reset confirma, preserva backup do arquivo específico e restaura o
+arquivo compartilhado, sem publicar. Links Add grava no TOML e atualiza a memória.
+Remove apaga somente a publicação selecionada; os TOMLs continuam disponíveis.
+
+Rules e Links usam TOML como fonte de conteúdo. Documentos antigos do JSON são
+preservados em backup e arquivados antes da descontinuação dessa precedência.
+Message IDs e referências operacionais continuam no JSON por Guild ID.
+
+Comandos administrativos exigem Gerenciar Mensagens; Profile exige Gerenciar
+Servidor; Role exige Gerenciar Cargos. Também é exigido o cargo moderador
+configurado, se houver. O dono da guilda dispensa essas restrições pessoais.
+As permissões do bot e a hierarquia continuam obrigatórias. O usuário autorizado
+não precisa de permissão direta de escrita no canal de anúncios. Menções são
+suprimidas. O perfil global e outras guildas não são alterados.
+
+Veja o [guia de comandos](docs/commands.md), [V1.1](docs/v1.1.md),
+[arquitetura](docs/architecture.md) e [multiguild](docs/multiguild.md).
 
 ## Stack e estrutura
 
@@ -110,44 +113,51 @@ inicial; não há registro global. Reinicie após mudanças na configuração. R
 um servidor do TOML bloqueia suas interações mesmo se comandos antigos ainda
 aparecerem no cliente; remova a aplicação desse servidor para concluir a retirada.
 
-## Configuracao
+## Configuração
 
-`config/default.toml` concentra configuracoes globais e `[guilds.alias]` com `id`,
-`name` e `enabled`. `name` determina diretamente a pasta `config/guilds/<name>`.
-Nao repita identidade nos arquivos locais. Nomes com espacos e Unicode sao aceitos;
-nomes reservados, caminhos e colisoes equivalentes sao rejeitados.
+`config/default.toml` registra cada guilda por alias, `id`, `name` e `enabled`.
+O nome determina `config/guilds/<nome>`; não existe campo `folder`. Arquivos
+específicos herdam `config/guilds/defaults/`. Mapas mesclam campos; arrays são
+substituídos por inteiro. Arquivos locais podem faltar.
 
-Os arquivos locais padronizados sao `config.toml`, `commands.toml`, `rules.toml`,
-`announcements.toml` e `links.toml`. Eles herdam os arquivos de mesmo nome em
-`config/guilds/defaults/`. Propriedades/mapas mesclam individualmente; listas sao
-substituidas, e listas vazias limpam o conteudo. Arquivos locais podem faltar.
+`commands.toml` controla raízes em `[commands]` e ações em `[actions.rules]`,
+`[actions.links]`, etc. Módulos desabilitados bloqueiam suas operações. Cada guilda
+recebe suas escolhas habilitadas, e a execução revalida a disponibilidade. Se a
+ação padrão estiver desabilitada, selecione outra explicitamente.
 
-`commands.toml` habilita cada comando ou subcomando. Modulos desabilitados bloqueiam
-seus comandos; o registro slash omite comandos desligados e grupos vazios.
-Reinicie apos alterar TOMLs. Personalizacoes JSON feitas no Discord continuam
-prioritarias. O estado permanece em `data/guilds/<Guild ID>/state.json`.
+As configurações gerais são carregadas na inicialização. Rules e Links oferecem
+Update explícito; Profile Revert lê seus defaults TOML novamente. Alterações em
+módulos, comandos, canais e registro exigem reinicialização.
 
-Para migrar uma instalacao V1.1, pare o bot e execute:
+Exemplos públicos: [commands](config/guilds/commands.toml.example),
+[rules](config/guilds/rules.toml.example), [links](config/guilds/links.toml.example)
+e [announcements](config/guilds/announcements.toml.example).
+URLs no TOML precisam de aspas: `url = "https://discord.gg/convite"`.
+O formato legado `title` + `[[entries]]` de links continua aceito como quadro
+`default`; o formato novo usa `[[boards]]` e `[[boards.links]]`.
+
+Para migrar o cadastro legado, pare o bot e execute:
 
 ```sh
 cargo run --bin migrate-config -- config templates
 cargo run --bin migrate-config -- --check config
 ```
 
-Fontes e backup sao preservados. Veja [o guia completo](docs/multiguild.md).
+Não execute migração em uma instalação já registrada. Fontes e backup são
+preservados. A migração de conteúdo JSON é automática na primeira inicialização
+da nova versão, antes do registro de comandos. Não apague `state.json`.
 
-| Variavel | Uso |
+| Variável | Uso |
 |---|---|
-| `DISCORD_TOKEN` | Token privado obrigatorio |
-| `CONFIG_DIR` | Configuracoes, padrao `config` |
-| `DATA_DIR` | Estado JSON, padrao `data` |
+| `DISCORD_TOKEN` | Token privado obrigatório |
+| `CONFIG_DIR` | Configurações, padrão `config` |
+| `DATA_DIR` | Estado JSON, padrão `data` |
 | `RUST_LOG` | Sobrescreve o logging global |
-| `TEMPLATE_DIR` | Somente compatibilidade com templates legados |
+| `TEMPLATE_DIR` | Compatibilidade/migração de templates legados |
 
-Nunca publique `.env`, dados JSON ou configuracoes reais. Pastas locais sao
-ignoradas, mas **`config/default.toml` ja e rastreado pelo Git**: revise o staging
-e nao inclua o registro privado em commits. Use `default.toml.example` como exemplo
-publico. O build Docker inclui somente fontes e manifestos Cargo.
+Nunca publique `.env`, estados JSON ou configurações reais. Pastas específicas são
+ignoradas; `config/default.toml` já é rastreado: não inclua alterações privadas no
+staging. O build Docker copia somente fontes e manifestos Cargo.
 
 ## Executar
 
@@ -167,9 +177,12 @@ docker compose down
 ```
 
 Use `--quiet` ao validar Compose para não imprimir o token interpolado. Não há
-portas expostas. Configuração é montada somente leitura; logs vão para stdout.
+portas expostas. O registro e os defaults são montados somente leitura; logs vão para stdout.
 O contêiner recebe SIGTERM e encerra conexões. A imagem final não contém toolchain.
-Conteúdos TOML ficam em `config`, montado somente para leitura. O volume `bot-data` mantém
+Os diretórios específicos em `config/guilds` permitem escrita para Reset e Links Add;
+`config/guilds/defaults` continua somente leitura. Crie as pastas das guildas
+e conceda escrita ao UID 10001 nelas antes de subir o contêiner (veja o guia multiguild).
+O volume `bot-data` mantém
 as publicações entre reinicializações, com escrita pelo UID 10001. Não remova esse
 volume ao atualizar; faça backup com o bot parado.
 
@@ -186,7 +199,7 @@ CI executa esses checks em pushes e pull requests para `main`, sem deploy ou
 publicação de imagens. Testes locais cobrem parsing, validação, duplicidade,
 seleção de servidor e regras de autorização; não precisam de token.
 
-Em um servidor de desenvolvimento, valide manualmente: os cinco comandos,
+Em um servidor de desenvolvimento, valide manualmente: os sete comandos,
 anúncio em canal permitido e negado, menções sem notificação, usuário sem
 permissão/cargo, cargo acima do bot, cargo gerenciado, módulo desabilitado,
 servidor não autorizado, reconexão e encerramento. Teste com cargos descartáveis.

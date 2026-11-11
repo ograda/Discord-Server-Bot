@@ -1,0 +1,123 @@
+# Guia de comandos — V1.1
+
+Somente `/role` usa subcomandos reais. Os demais comandos com ação padrão usam
+uma escolha opcional `ação`; Ping utiliza `modo`. Não há `/status`, `/announcements`,
+`/profile show`, `/profile apply` ou subcomandos nativos em Rules/Links.
+A lista de choices é filtrada por guilda. Uma ação padrão desligada não é
+substituída silenciosamente: selecione explicitamente outra permitida.
+
+| Comando | Padrão | Choices |
+|---|---|---|
+| `/ping` | `simples` | `modo:simples`, `status` |
+| `/role` | Nenhum | `/role add`, `/role remove` |
+| `/rules` | `preview` | `ação:preview`, `publish`, `update`, `reset`, `remove` |
+| `/links` | `preview` | `ação:preview`, `publish`, `update`, `reset`, `add`, `remove` |
+| `/announcement` | `create` | `ação:create`, `edit`, `remove` |
+| `/announce` | Enviar embed | Não possui ação |
+| `/profile` | `revert` | `ação:revert`, `nickname`, `bio`, `avatar` |
+
+## Rules
+
+`/rules` mostra os embeds atualmente em memória, em privado, sem botões de edição.
+Altere `config/guilds/<nome>/rules.toml` e execute `/rules ação:update` para validar
+e recarregar. O bot informa o arquivo específico e os defaults usados; se houver
+erro, preserva o snapshot anterior. Update não altera nenhuma mensagem pública.
+
+`/rules ação:publish` mostra o conteúdo atual com apenas Publicar/Cancelar.
+Confirmar cria a publicação, ou edita a original mantendo o Message ID. A sessão
+expira em 120 segundos, é vinculada ao autor e é consumida uma única vez.
+Mudanças de revisão invalidam a confirmação. Cancelar não salva nem publica.
+
+`/rules ação:reset` confirma a cópia de `guilds/defaults/rules.toml` para a pasta
+específica, preserva o arquivo anterior em `rules.toml.backup-*.bak`, valida antes
+da gravação atômica e recarrega a memória. Não publica. `ação:remove` confirma a
+exclusão da mensagem gerenciada e de sua referência; preserva a definição TOML.
+
+## Links e quadros
+
+Use [o exemplo](../config/guilds/links.toml.example) para definir `[[boards]]`.
+Board ID identifica o quadro; `boards.links.id` identifica um link dentro dele.
+`channel` é um alias de canal de `config.toml`, por exemplo `links` ou um canal de
+`channels.custom`. IDs numéricos de canal, guilda e mensagem têm responsabilidades
+separadas. Não mude o Board ID se deseja manter sua associação operacional.
+
+`/links` mostra o único quadro automaticamente; se houver vários, abre um menu
+paginado. `quadro` também aceita autocomplete por título/ID. Publish e Remove
+operam somente no quadro escolhido e pedem confirmação. Remove preserva o catálogo.
+Update recarrega o arquivo inteiro; Reset restaura os defaults com backup.
+
+Exemplo de Add direto:
+
+```text
+/links ação:add quadro:importantes id:convite titulo:"Convite da comunidade" url:"https://discord.gg/convite"
+```
+
+`descricao` e `emoji` são opcionais. Se faltar `id`, `titulo` ou `url`, o bot abre
+um formulário nativo com esses campos. O formulário contém apenas texto; não usa
+upload de arquivo em modal. URLs HTTP/HTTPS são aceitas, inclusive `discord.gg`.
+A mudança é validada e salva em `links.toml`, com backup; atualiza a memória sem
+publicar. Use Publish depois. Outros quadros e comentários são preservados quando
+possível; formatos inline podem ser normalizados, mantendo o backup original.
+
+O formato antigo `title`, `description`, `[[entries]]` vira um quadro `default`.
+Sua chave de publicação `links` continua válida. Ao adotar `[[boards]]`, o registro
+antigo é associado ao primeiro quadro no startup, se essa associação ainda não
+existir, com backup do estado anterior. Não há duplicação da mensagem.
+
+## Announcement e envio rápido
+
+`/announcement mensagem:"Aviso importante"` usa o estilo de `announcements.toml`,
+mostra prévia e confirma antes de publicar. Sem `mensagem`, abre formulário de
+título, descrição, cor, imagem e rodapé.
+
+`/announcement ação:edit` e `ação:remove` oferecem seleção de anúncios gerenciados.
+O parâmetro `identificador` tem autocomplete por título/chave/Message ID. Também
+aceita o link de uma mensagem gerenciada da guilda atual. Edit aceita `mensagem`
+ou formulário e mantém o Message ID após confirmação. Remove confirma exclusão.
+Não existe operação pública List; o menu/autocomplete fornece a descoberta.
+
+`/announce mensagem:"Aviso"` envia imediatamente um embed ao canal `announcements`.
+`/announce mensagem:"Aviso" canal:#geral` usa outro canal da mesma guilda. Mantém
+cor, título, imagem e rodapé do template. Não cria um registro de anúncio gerenciado;
+para edição/remoção pelo bot, utilize Announcement. Ambos suprimem menções.
+
+## Profile
+
+`/profile` ou `ação:revert` pede confirmação e aplica nickname/avatar/bio definidos
+em `config.toml`, com fallback por campo para os defaults compartilhados. Valores
+ausentes são removidos do perfil da guilda; nunca muda o username/avatar global.
+As personalizações JSON são limpas somente após sucesso da operação remota.
+
+```text
+/profile ação:nickname apelido:"Bot da comunidade"
+/profile ação:bio biografia:"Informações da comunidade"
+/profile ação:avatar imagem:<anexo>
+/profile ação:avatar imagem:<anexo> normalizar:true
+```
+
+Apelido/bio ausentes abrem formulário. Avatar exige um Attachment no slash command;
+não há upload em modal nesta versão do Serenity. PNG/JPEG/GIF são reconhecidos
+pelos bytes e decodificados; MIME, limite local de 4 MiB e dimensões até 4096×4096
+são verificados. Uma imagem válida de 1254×1254 não é rejeitada pela resolução.
+`normalizar:true` converte explicitamente para PNG 512×512 com proporção preservada
+e margens transparentes. GIF normalizado fica estático. Sem a opção, não redimensiona.
+
+O bot distingue falhas de validação, download, processamento e HTTP. Respostas
+HTTP trazem status/código/campos rejeitados sem expor tokens ou Base64. Não há
+retry cego de alterações de perfil. A confirmação da API antecede a persistência.
+
+## Permissões, parâmetros e recuperação
+
+Todos os parâmetros condicionais são opcionais no registro. A ação selecionada
+valida quais podem ser usados; parâmetros de outra ação são rejeitados. Não deixe
+`imagem` preenchida ao executar Revert, por exemplo.
+
+Rules, Links e anúncios exigem Gerenciar Mensagens; Profile exige Gerenciar
+Servidor; Role exige Gerenciar Cargos. Cargo moderador configurado e hierarquias
+continuam valendo. As permissões de canal são verificadas para o bot, permitindo
+uso por um administrador autorizado que não possa escrever diretamente no destino.
+
+Se uma publicação sumiu do Discord, Publish preserva suas referências e informa
+404. Execute Remove e confirme para reconciliar somente aquele registro antes
+de publicar de novo. Se `pending` indicar resultado HTTP incerto, confira o canal
+e o estado antes de qualquer repetição; mantenha backups e não apague o JSON.

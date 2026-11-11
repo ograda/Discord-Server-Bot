@@ -246,13 +246,16 @@ fn profile_module_and_rules_links_registration() {
         toml::from_str(include_str!("fixtures/global.toml")).unwrap();
     let mut guild: config::GuildConfig = toml::from_str("guild_id='1'\n[modules]\nadministration=true\nmessaging=true\nroles=true\nrules=true\nlinks=true\nprofile=true\n[profile]\nnickname='Bot'\nbio='Community'").unwrap();
     let commands = config::availability::registered(&guild, global.modules);
-    for (name, count) in [("rules", 7), ("links", 7), ("profile", 5)] {
+    for (name, count) in [("rules", 5), ("links", 6), ("profile", 4)] {
+        let command = commands.iter().find(|c| c.name == name).unwrap();
+        assert!(command.subcommands.is_empty());
         assert_eq!(
-            commands
+            command
+                .parameters
                 .iter()
-                .find(|c| c.name == name)
+                .find(|p| p.name == "ação")
                 .unwrap()
-                .subcommands
+                .choices
                 .len(),
             count
         );

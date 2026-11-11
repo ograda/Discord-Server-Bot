@@ -1,89 +1,106 @@
-# Arquitetura
+# Arquitetura — V1.1 estabilizada
 
-Um pacote Cargo, monólito modular e runtime Tokio. `main` carrega ambiente e TOML,
-configura tracing e entrega a execução ao núcleo. Poise gerencia comandos slash
-e Serenity mantém a conexão Gateway, incluindo reconexão e retomada de sessão.
-Serenity é usado pelo reexport de Poise para evitar versões incompatíveis.
+Um pacote Rust, Serenity 0.12 por reexport de Poise 0.6, runtime Tokio e armazenamento
+JSON existente. Não há banco, scheduler, webhooks, painel ou serviço adicional.
 
-`config` carrega configurações uma vez, antes de conectar. `default.toml` registra
-as guildas por alias, ID, nome de pasta e habilitação. Arquivos padronizados em
-`guilds/<name>` sobrescrevem `guilds/defaults`; tabelas mesclam recursivamente e
-listas são substituídas integralmente. Campos desconhecidos, IDs inválidos e
-nomes/aliases duplicados interrompem a inicialização. IDs usam os tipos Snowflake
-de Serenity, sem conversão para ponto flutuante. `Data` centraliza a configuração
-imutável e o início do tempo operacional (após registro dos comandos).
+## Componentes reutilizados
 
-`core` mantém cliente, registro por servidor, comandos básicos e autorização.
-`modules/messaging` publica anúncios; `modules/roles` altera cargos. Administração
-é uma política central em `core/permissions`, sem um módulo vazio adicional.
-Os módulos são habilitados por servidor com sobrescritas por propriedade.
-Administração desabilitada bloqueia anúncios, regras, links e cargos.
-`commands.toml` controla folhas individuais: a mesma política filtra o payload
-slash de cada guilda e valida execução. Grupos vazios não são registrados.
+- `config`: registro multiguild, Serde/TOML, validação de nomes/IDs, defaults e flags.
+- `core`: inicialização, registro slash por guilda, autorização e diagnósticos.
+- `modules`: interface dos sete comandos; somente Role possui subcomandos.
+- `services/content`: o mesmo construtor de embeds e validação de limites/URLs.
+- `services/catalog`: snapshots mutáveis somente de Rules/Links, com recarga explícita.
+- `services/publishing`: prévia/confirmar e transação de publicação da mensagem original.
+- `services/announcements`: construtor de mensagem, chaves, seleção e links gerenciados.
+- `services/profile`: download/decodificação, Data URI, REST por guilda e persistência.
+- `services/storage`: lock entre processos, mutex, revisão, journal e snapshots JSON.
+- `services/ui`: confirmações de uso único, menus paginados e abertura de formulários.
 
-Cada interação verifica a lista de servidores autorizados, sem exceção para donos
-da aplicação. A autorização administrativa consulta membros e cargos via HTTP:
-permissão Discord obrigatória, mais cargo configurado quando houver restrição.
-O dono do servidor dispensa essas restrições pessoais; o bot nunca dispensa suas
-próprias permissões e hierarquia. `administrative` verifica a autorização do autor;
-as operações verificam separadamente as permissões do bot com
-`ensure_bot_permissions` ou `ensure_bot_channel_permissions`. Anúncios verificam
-sobrescritas do canal somente para o bot, sem exigir envio direto pelo autor.
-Alterações de cargos verificam hierarquias de autor, alvo e bot,
-incluindo desempate de posição pelo ID implementado por Serenity. Cargos gerenciados,
-`@everyone`, dono do servidor e o próprio bot são protegidos.
+## Configuração e memória
 
-As permissões padrão dos slash commands facilitam a interface; as verificações
-no servidor continuam obrigatórias. Como no Discord, mudanças concorrentes de
-cargos/permissões entre consulta e ação ainda podem fazer a API rejeitar a ação.
-Não são solicitadas intents privilegiadas: somente `GUILDS`. Membros individuais
-são consultados via REST, sem baixar a lista de membros.
+`main` lê `.env` e o registro global. Configurações gerais ficam imutáveis em `Data`.
+`name` do registro determina a pasta; o Guild ID determina o estado operacional.
+Defaults e arquivos específicos mesclam tabelas; arrays são substituídos.
 
-Logs estruturados vão para stdout, sem conteúdo de anúncios, argumentos ou token.
-Respostas administrativas são efêmeras. Menções são desabilitadas nos anúncios.
-Ctrl+C e SIGTERM encerram os shards. Docker executa usuário 10001, filesystem
-somente leitura, sem portas públicas e com configuração montada somente leitura.
+`Catalog` mantém um snapshot por Guild ID protegido por `RwLock`, com regras,
+quadros de links, origem e revisão. Preview usa somente esse snapshot. Update lê
+os arquivos, aplica fallback, valida e substitui o conteúdo somente após sucesso.
+Uma falha mantém conteúdo e revisão anteriores. Não é um hot reload genérico:
+configuração geral, módulos, canais e comandos continuam exigindo reinicialização.
+Profile Revert lê novamente somente os defaults de perfil.
 
-Sem banco, fila, scheduler ou abstração de áudio na V1. Para V1.2, SQLite/SQLx
-armazenará estado dinâmico; TOML continuará sendo a configuração estática.
-Na V2, Lavalink será outro serviço Compose: Rust controla comandos, permissões e
-players. Várias identidades de bot poderão compartilhar esse serviço. Reprodução
-simultânea em canais do mesmo servidor exige identidades Discord separadas, com
-tokens próprios, a serem projetadas nessa versão.
+Reset valida o arquivo compartilhado antes de copiar seus bytes para a guilda.
+Links Add usa `toml_edit` para preservar comentários e estrutura quando possível,
+valida o arquivo efetivo resultante, cria backup exato e usa arquivo temporário
+no mesmo diretório + rename atômico. Comentários em arrays inline normalizados
+podem mudar; o backup mantém os bytes anteriores. O mutex de `Store` serializa
+essas operações com as confirmações de publicação. Caminhos são resolvidos pelo
+registro autorizado e não por parâmetros do usuário; escapes e symlinks/junções
+nos caminhos de conteúdo são bloqueados.
 
-## Conteúdo gerenciado V1.1
+## Comandos e autorização
 
-`config/registry` resolve aliases sem permitir que comandos escolham outros servidores.
-`services/content` representa texto e embeds, valida limites e URLs e divide coleções
-em cinco campos por embed. `services/publishing` aplica autorização, prévia privada,
-confirmação vinculada ao autor, expiração e atualização de mensagens próprias.
-`modules/content_commands` mantém os modals e os grupos announcements, rules e links.
+As sete raízes são Ping, Role, Rules, Links, Announcement, Announce e Profile.
+Choices opcionais permitem executar a raiz com a ação padrão. Parâmetros
+condicionais são opcionais no esquema e validados por ação no runtime.
+Somente Role mantém subcomandos reais; sua raiz não realiza operação.
 
-`services/storage` usa um snapshot JSON por guild com documentos, publicações,
-revisão e operação pendente. Gravação atômica em mesmo filesystem, mutex durante
-transações e lock entre processos evitam perdas concorrentes. Revisões rejeitam
-prévias obsoletas. O registro pendente bloqueia reenvio cego quando o resultado HTTP
-é incerto; não há promessa de atomicidade distribuída Discord/disco.
-Dados persistidos têm prioridade sobre conteúdos locais e compartilhados, carregados
-em memória no startup. Não se alteram TOMLs pelo Discord. A identificação dos estados
-continua por Guild ID, sem migração de JSON ou divisão do snapshot atômico.
-ICU4X, já presente transitivamente, valida colisões de nomes por NFKC/maiúsculas.
-O migrador valida destinos antes de gravar, preserva fontes, cria backup e substitui
-o registro global por último. O registro central é autoritativo quando presente;
-somente sua ausência ativa o carregador legado. Veja [Multiguild](multiguild.md).
-# Extensão de perfil e diagnóstico V1.1
+Flags de raiz, flags de ação, módulo e status da guilda são considerados no
+registro e na execução. Choices por guilda preservam seus índices originais do
+Poise: filtrar renumerando os índices poderia executar a ação errada. O registro
+usa `GuildId::set_commands`, bulk overwrite oficial apenas dos comandos da própria
+aplicação naquela guilda, substituindo as definições públicas antigas.
 
-`services/announcements.rs` resolve chaves internas e Message IDs exclusivamente
-contra publicações conhecidas da guilda. `services/profile.rs` contém validação de
-assets, cálculo das diferenças e um adaptador REST tipado para o endpoint oficial
-de membro atual. `modules/profile.rs` aplica a autorização administrativa existente.
-O adaptador não altera o usuário global; sanitiza erros e respeita respostas 429.
-Campos ausentes no Serenity são tratados apenas nesse adaptador, sem duplicar o
-cliente de eventos. Imagens não aparecem em logs e são validadas antes do envio.
+A autorização administrativa consulta membros/cargos via REST: permissão exigida,
+mais cargo moderador se configurado. O dono dispensa suas restrições pessoais.
+O bot sempre verifica suas próprias permissões, hierarquia e acesso ao canal.
+Não é exigida permissão direta de envio do autor no canal de anúncios.
+Somente intent `GUILDS` é solicitada; nenhuma intent privilegiada.
 
-O campo opcional `profile` do estado existente mantém compatibilidade com JSONs
-anteriores, usando o mesmo bloqueio e gravação atômica. Overrides JSON prevalecem
-sobre TOML; assets TOML são carregados na inicialização e confinados à pasta da
-guilda. Nenhuma atualização de perfil é executada automaticamente no startup.
-Veja as limitações de leitura de biografia e a homologação no
-[guia de estabilização](stabilization-profile.md).
+## Publicação e estado
+
+Rules e Links não leem conteúdo antigo do JSON. Antes do uso da nova versão,
+o startup preserva o JSON original em `state.pre-toml-*.json.bak` e move os
+documentos antigos para `archived_documents` no mesmo snapshot. Não perde
+publicações, perfil ou informações de reconciliação. Migrações são idempotentes;
+um journal pendente bloqueia uma migração que precisaria alterar aquele estado.
+
+Cada quadro tem Board ID estável e uma publicação independente (`links:<id>`).
+O quadro legado `default` preserva a chave `links`. Uma publicação legada pode ser
+associada ao primeiro quadro da nova configuração durante a migração, mantendo
+canal e Message ID e preservando o estado anterior em backup.
+
+A confirmação é efêmera, vinculada ao autor, expira em 120 segundos e desativa
+os botões antes dos efeitos. A autorização e revisões são conferidas novamente.
+A transação busca a mensagem existente, verifica autoria e canal, grava `pending`,
+faz POST/PATCH/DELETE e então salva a referência/revisão e limpa o journal.
+PATCH preserva o Message ID. Uma confirmação repetida/obsoleta não repete o envio.
+Erro de transporte mantém `pending` para evitar duplicação. Remove pode reconciliar
+uma mensagem já ausente (404) após confirmação; Publish preserva os IDs nesse caso.
+
+Anúncios gerenciados conservam seus documentos e chaves `announcement-<interaction>`.
+O envio rápido usa o mesmo estilo de embed e não cria um anúncio gerenciado.
+Menções são suprimidas em previews e publicações.
+
+## Perfil e diagnósticos
+
+Profile usa a API `PATCH /guilds/{id}/members/@me` com nick/bio/avatar e nunca
+altera o perfil global. Revert representa valores ausentes como JSON null.
+Customizações só são limpas após as requisições necessárias terem sucesso.
+Falha no disco após sucesso remoto é explicada sem alegar uma transação distribuída.
+
+Avatar é Attachment no slash, não upload em modal. O serviço limita download,
+verifica MIME/assinatura, decodifica, gera Data URI e distingue cada etapa de erro.
+Normalização para PNG 512×512 é explícita e proporcional. O hash retornado pela
+API confirma a aplicação antes de persistir a personalização.
+
+Logs incluem guilda, módulo, comando, ação, etapa e causa sanitizada. Erros HTTP
+apresentam status/código quando disponíveis. Argumentos, tokens, corpos HTTP
+livres e imagens Base64 não são registrados. Requisições de anexo não levam token.
+
+## Execução
+
+O processo encerra shards em Ctrl+C/SIGTERM. Docker mantém usuário 10001,
+filesystem somente leitura, sem portas/capabilities e sem privilégios adicionais.
+Apenas o volume de dados e a árvore de guildas permitem escrita; os defaults e o
+registro continuam somente leitura. Veja permissões e backups em [multiguild](multiguild.md).

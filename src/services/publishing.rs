@@ -1,15 +1,16 @@
 use crate::{
     core::{Context, Error, permissions},
-    services::{
-        content::Document,
-        storage::{Publication, template},
-    },
+    services::{content::Document, storage::Publication, ui},
 };
 use anyhow::{Context as _, ensure};
 use poise::serenity_prelude as s;
-use std::time::Duration;
 
-pub async fn authorize(ctx: Context<'_>, kind: &str, embeds: bool) -> Result<s::ChannelId, Error> {
+pub async fn authorize_channel(
+    ctx: Context<'_>,
+    kind: &str,
+    channel: s::ChannelId,
+    embeds: bool,
+) -> Result<s::GuildChannel, Error> {
     let cfg = permissions::guild_config(ctx)?;
     let modules = cfg.modules.unwrap_or(ctx.data().config.global.modules);
     ensure!(
@@ -21,296 +22,244 @@ pub async fn authorize(ctx: Context<'_>, kind: &str, embeds: bool) -> Result<s::
         "Módulo desabilitado"
     );
     let auth = permissions::administrative(ctx, s::Permissions::MANAGE_MESSAGES).await?;
-    let id = cfg.channel(kind)?;
-    let channel = id
+    let target = channel
         .to_channel(ctx.http())
         .await?
         .guild()
         .context("Canal inválido")?;
     ensure!(
-        matches!(channel.kind, s::ChannelType::Text | s::ChannelType::News),
+        matches!(target.kind, s::ChannelType::Text | s::ChannelType::News),
         "Use canal de texto ou anúncios"
     );
     let mut required = s::Permissions::VIEW_CHANNEL | s::Permissions::SEND_MESSAGES;
     if embeds {
         required |= s::Permissions::EMBED_LINKS;
     }
-    permissions::ensure_bot_channel_permissions(&auth, &channel, required)?;
+    permissions::ensure_bot_channel_permissions(&auth, &target, required)?;
+    Ok(target)
+}
+pub async fn authorize(ctx: Context<'_>, kind: &str, embeds: bool) -> Result<s::ChannelId, Error> {
+    let id = permissions::guild_config(ctx)?.channel(kind)?;
+    authorize_channel(ctx, kind, id, embeds).await?;
     Ok(id)
 }
 pub async fn load(ctx: Context<'_>, kind: &str) -> Result<(Document, u64), Error> {
-    authorize(ctx, kind, kind != "announcements").await?;
+    permissions::administrative(ctx, s::Permissions::MANAGE_MESSAGES).await?;
     let cfg = permissions::guild_config(ctx)?;
     let _guard = ctx.data().store.gate.lock().await;
     let state = ctx.data().store.read(cfg.guild_id)?;
-    let mut doc = template(&ctx.data().templates, cfg, kind, &state)?;
-    doc.entries.sort_by_key(|entry| entry.order);
+    let doc = if kind == "rules" {
+        ctx.data().catalog.snapshot(cfg.guild_id).await?.rules
+    } else {
+        super::storage::template(&ctx.data().templates, cfg, kind, &state)?
+    };
     Ok((doc, state.revision))
 }
-
-/// Prévia vinculada ao usuário, mensagem efêmera e ID único da interação.
-pub async fn preview(
-    ctx: Context<'_>,
-    kind: &str,
-    key: String,
-    mut doc: Document,
-    revision: u64,
-    delete: bool,
-) -> Result<(), Error> {
-    let id = ctx.id();
-    let publish = format!("publish:{id}");
-    let cancel = format!("cancel:{id}");
-    let edit = format!("edit:{id}");
-    let save = format!("save:{id}");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(240);
-    loop {
-        let embeds = doc.embeds(kind)?;
-        let mut buttons = vec![
-            s::CreateButton::new(&publish)
-                .label(if delete {
-                    "Confirmar exclusão"
-                } else {
-                    "Confirmar / Publicar"
-                })
-                .style(s::ButtonStyle::Primary),
-            s::CreateButton::new(&cancel).label("Cancelar"),
-        ];
-        if !delete && kind == "announcements" {
-            buttons.push(s::CreateButton::new(&edit).label("Editar"));
-        }
-        if !delete && kind != "announcements" {
-            buttons.push(s::CreateButton::new(&save).label("Salvar rascunho"));
-            if !doc.entries.is_empty() {
-                buttons.push(s::CreateButton::new(&edit).label("Editar item"));
-            }
-        }
-        let reply = ctx
-            .send(
-                poise::CreateReply {
-                    embeds,
-                    ..Default::default()
-                }
-                .content(if doc.text.is_empty() {
-                    "Prévia privada • sessão de confirmação: 4 minutos"
-                } else {
-                    &doc.text
-                })
-                .components(vec![s::CreateActionRow::Buttons(buttons)])
-                .ephemeral(true)
-                .allowed_mentions(s::CreateAllowedMentions::new()),
-            )
-            .await?;
-        let message = reply.message().await?;
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let interaction = message
-            .await_component_interaction(ctx.serenity_context())
-            .author_id(ctx.author().id)
-            .timeout(remaining)
-            .await;
-        let Some(interaction) = interaction else {
-            reply
-                .edit(
-                    ctx,
-                    poise::CreateReply::default()
-                        .content("Sessão expirada. Execute o comando novamente.")
-                        .components(vec![]),
-                )
-                .await?;
-            return Ok(());
-        };
-        if interaction.data.custom_id == edit {
-            let updated = if kind == "announcements" {
-                crate::modules::content_commands::announcement_modal(ctx, Some(&interaction), &doc)
-                    .await?
-            } else {
-                crate::modules::content_commands::collection_modal(ctx, &interaction, &doc).await?
-            };
-            reply
-                .edit(ctx, poise::CreateReply::default().components(vec![]))
-                .await?;
-            if let Some(updated) = updated {
-                ensure!(
-                    tokio::time::Instant::now() < deadline,
-                    "Sessão expirada; execute novamente"
-                );
-                doc = updated;
-                continue;
-            }
-            return Ok(());
-        }
-        interaction
-            .create_response(ctx.http(), s::CreateInteractionResponse::Acknowledge)
-            .await?;
-        reply
-            .edit(ctx, poise::CreateReply::default().components(vec![]))
-            .await?;
-        if interaction.data.custom_id == save {
-            authorize(ctx, kind, true).await?;
-            let guild = permissions::guild_config(ctx)?.guild_id;
-            let _guard = ctx.data().store.gate.lock().await;
-            let mut state = ctx.data().store.read(guild)?;
-            ensure!(
-                state.revision == revision && state.pending.is_none(),
-                "Estado alterado ou pendente; abra nova prévia"
-            );
-            state.documents.insert(key.clone(), doc.clone());
-            state.revision += 1;
-            ctx.data().store.write(guild, &state)?;
-            tracing::info!(%guild, %key, actor = %ctx.author().id, "Rascunho salvo");
-            ctx.say("Rascunho salvo. Use publish ou update para publicar.")
-                .await?;
-            return Ok(());
-        }
-        if interaction.data.custom_id != publish {
-            ctx.say("Operação cancelada.").await?;
-            return Ok(());
-        }
-        let result = commit(ctx, kind, &key, &doc, revision, delete).await?;
-        ctx.say(result).await?;
+pub struct Plan {
+    pub operation: u64,
+    pub kind: &'static str,
+    pub action: String,
+    pub key: String,
+    pub document: Document,
+    pub channel: s::ChannelId,
+    pub revision: u64,
+    pub content_revision: Option<u64>,
+    pub delete: bool,
+}
+pub async fn preview(ctx: Context<'_>, plan: Plan) -> Result<(), Error> {
+    let label = if plan.delete { "Remover" } else { "Publicar" };
+    if !ui::confirm(
+        ctx,
+        "Prévia privada; confirme para modificar a publicação.",
+        label,
+        Some((&plan.document, plan.kind)),
+    )
+    .await?
+    {
         return Ok(());
     }
+    let result = commit(ctx, &plan).await?;
+    ctx.say(result).await?;
+    Ok(())
 }
-
-async fn commit(
-    ctx: Context<'_>,
-    kind: &str,
-    key: &str,
-    doc: &Document,
-    revision: u64,
-    delete: bool,
-) -> Result<String, Error> {
-    let embeds = doc.embeds(kind)?;
-    let channel = authorize(ctx, kind, !embeds.is_empty()).await?;
-    let guild = permissions::guild_config(ctx)?.guild_id;
-    let _guard = ctx.data().store.gate.lock().await;
-    let mut state = ctx.data().store.read(guild)?;
-    ensure!(
-        state.revision == revision,
-        "Conteúdo alterado por outra operação. Abra nova prévia."
-    );
-    ensure!(
-        state.pending.is_none(),
-        "Existe operação com resultado incerto. Confira o canal e o state.json antes de repetir; publicação bloqueada para evitar duplicação."
-    );
-    let existing = state.publications.get(key).cloned();
-    ensure!(
-        kind != "announcements"
-            || existing.is_some()
-            || key == crate::services::announcements::new_id(ctx.id()),
-        "Anúncio já não possui publicação registrada; crie um novo anúncio, não uma edição"
-    );
-    if kind == "rules" || kind == "links" {
-        let action = if existing.is_some() {
-            "update"
-        } else {
-            "publish"
-        };
-        let guild_config = permissions::guild_config(ctx)?;
-        ensure!(
-            guild_config.command_enabled(
-                &format!("{kind}.{action}"),
-                ctx.data().config.global.modules
-            ),
-            "Publicação/atualização desabilitada nesta guilda"
-        );
-    }
-    ensure!(!delete || existing.is_some(), "Publicação inexistente");
-    if let Some(publication) = &existing {
+async fn commit(ctx: Context<'_>, plan: &Plan) -> Result<String, Error> {
+    let cfg = permissions::guild_config(ctx)?;
+    let guild = cfg.guild_id;
+    permissions::action(ctx, plan.kind_to_root(), &plan.action)?;
+    let target = authorize_channel(
+        ctx,
+        plan.kind,
+        plan.channel,
+        !plan.document.embeds(plan.kind)?.is_empty(),
+    )
+    .await?;
+    let has_publication = {
+        let _guard = ctx.data().store.gate.lock().await;
+        ctx.data()
+            .store
+            .read(guild)?
+            .publications
+            .contains_key(&plan.key)
+    };
+    if has_publication {
         let auth = permissions::administrative(ctx, s::Permissions::MANAGE_MESSAGES).await?;
-        let target = channel
-            .to_channel(ctx.http())
-            .await?
-            .guild()
-            .context("Canal inválido")?;
         permissions::ensure_bot_channel_permissions(
             &auth,
             &target,
             s::Permissions::READ_MESSAGE_HISTORY,
         )?;
+    }
+    let bot = ctx.serenity_context().cache.current_user().id;
+    execute(
+        &ctx.data().store,
+        &ctx.data().catalog,
+        guild,
+        bot,
+        ctx.http(),
+        plan,
+    )
+    .await
+}
+
+/// Transaction core, independent of interactions; callers authorize the operation and channel first.
+pub async fn execute(
+    store: &super::storage::Store,
+    catalog: &super::catalog::Catalog,
+    guild: s::GuildId,
+    bot: s::UserId,
+    http: &s::Http,
+    plan: &Plan,
+) -> Result<String, Error> {
+    let embeds = plan.document.embeds(plan.kind)?;
+    let _guard = store.gate.lock().await;
+    let mut state = store.read(guild)?;
+    ensure!(
+        state.revision == plan.revision,
+        "Estado alterado por outra operação; abra uma nova prévia"
+    );
+    ensure!(
+        state.pending.is_none(),
+        "Operação pendente com resultado incerto; confira o canal e o estado antes de repetir"
+    );
+    if let Some(revision) = plan.content_revision {
         ensure!(
-            publication.channel == channel,
-            "Canal configurado mudou; revise o registro antes de atualizar"
+            catalog.snapshot(guild).await?.revision == revision,
+            "TOML em memória mudou; abra uma nova prévia"
         );
-        match channel.message(ctx.http(), publication.message).await {
+    }
+    let existing = state.publications.get(&plan.key).cloned();
+    ensure!(
+        !plan.delete || existing.is_some(),
+        "Publicação não encontrada nesta guilda"
+    );
+    ensure!(
+        plan.kind != "announcements"
+            || existing.is_some()
+            || (plan.action == "create"
+                && plan.key == super::announcements::new_id(plan.operation)),
+        "Anúncio sem publicação registrada; crie um novo anúncio"
+    );
+    let mut missing = false;
+    if let Some(publication) = &existing {
+        ensure!(
+            publication.channel == plan.channel,
+            "Canal configurado mudou; referências preservadas, reconcilie o registro antes de continuar"
+        );
+        match plan.channel.message(http, publication.message).await {
             Ok(message) => ensure!(
-                message.author.id == ctx.serenity_context().cache.current_user().id,
-                "Mensagem não pertence ao bot"
+                message.author.id == bot,
+                "Mensagem registrada não pertence ao bot"
             ),
             Err(s::Error::Http(s::HttpError::UnsuccessfulRequest(response)))
                 if response.status_code.as_u16() == 404 =>
             {
-                state.publications.remove(key);
-                if kind == "announcements" {
-                    state.documents.remove(key);
-                }
-                state.revision += 1;
-                ctx.data().store.write(guild, &state)?;
-                if kind == "announcements" {
-                    return Ok(format!(
-                        "Mensagem já excluída no Discord. Registro `{key}` reconciliado; nenhuma nova mensagem foi enviada."
-                    ));
-                }
-                anyhow::bail!(
-                    "Mensagem excluída manualmente. Registro recuperado; use publish e confirme uma nova publicação."
+                ensure!(
+                    plan.delete,
+                    "Mensagem original não encontrada (404). IDs preservados; use Remove para reconciliar antes de uma nova publicação"
                 );
+                missing = true;
             }
             Err(error) => return Err(error.into()),
         }
     }
-    state.pending = Some(format!("{key}:{}", ctx.id()));
-    ctx.data().store.write(guild, &state)?;
-    // Em resultado HTTP incerto, mantém journal pendente: nunca repete um envio cegamente.
-    if delete {
+    state.pending = Some(format!("{}:{}", plan.key, plan.operation));
+    store.write(guild, &state)?;
+    tracing::info!(%guild, module = plan.kind, action = plan.action, stage = "http", channel = %plan.channel, "Aplicando publicação confirmada");
+    // Keep pending on uncertain HTTP outcomes. A second click cannot repeat this transaction.
+    if plan.delete {
         let publication = existing.context("Publicação inexistente")?;
-        channel
-            .delete_message(ctx.http(), publication.message)
-            .await?;
-        state.publications.remove(key);
-        state.documents.remove(key);
+        if !missing {
+            match plan.channel.delete_message(http, publication.message).await {
+                Ok(()) => (),
+                Err(s::Error::Http(s::HttpError::UnsuccessfulRequest(response)))
+                    if response.status_code.as_u16() == 404 => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        state.publications.remove(&plan.key);
+        if plan.kind == "announcements" {
+            state.documents.remove(&plan.key);
+        }
     } else {
         let message = if let Some(publication) = existing {
-            channel
+            plan.channel
                 .edit_message(
-                    ctx.http(),
+                    http,
                     publication.message,
                     s::EditMessage::new()
-                        .content(&doc.text)
+                        .content(&plan.document.text)
                         .embeds(embeds)
                         .allowed_mentions(s::CreateAllowedMentions::new()),
                 )
                 .await?
         } else {
-            channel
+            plan.channel
                 .send_message(
-                    ctx.http(),
+                    http,
                     s::CreateMessage::new()
-                        .content(&doc.text)
+                        .content(&plan.document.text)
                         .embeds(embeds)
                         .allowed_mentions(s::CreateAllowedMentions::new()),
                 )
                 .await?
         };
         state.publications.insert(
-            key.into(),
+            plan.key.clone(),
             Publication {
-                channel,
+                channel: plan.channel,
                 message: message.id,
             },
         );
-        state.documents.insert(key.into(), doc.clone());
+        if plan.kind == "announcements" {
+            state
+                .documents
+                .insert(plan.key.clone(), plan.document.clone());
+        }
     }
     state.pending = None;
     state.revision += 1;
-    ctx.data().store.write(guild, &state)?;
-    tracing::info!(%guild, %channel, actor = %ctx.author().id, %key, delete, "Publicação gerenciada atualizada");
-    Ok(if delete {
-        format!("Anúncio `{key}` excluído e registro removido.")
+    store.write(guild, &state)?;
+    if plan.delete {
+        Ok(format!(
+            "Publicação `{}` removida; definição TOML preservada.",
+            plan.key
+        ))
     } else {
-        let publication = &state.publications[key];
-        format!(
-            "Operação concluída. Identificador: `{key}`\nMessage ID: `{}`\n[Ver mensagem]({})",
+        let publication = &state.publications[&plan.key];
+        Ok(format!(
+            "Conteúdo publicado; estado salvo nesta guilda. Identificador: `{}`\nMessage ID: `{}`\n[Ver mensagem]({})",
+            plan.key,
             publication.message,
-            crate::services::announcements::message_link(guild, publication)
-        )
-    })
+            super::announcements::message_link(guild, publication)
+        ))
+    }
+}
+impl Plan {
+    fn kind_to_root(&self) -> &'static str {
+        if self.kind == "announcements" {
+            "announcement"
+        } else {
+            self.kind
+        }
+    }
 }

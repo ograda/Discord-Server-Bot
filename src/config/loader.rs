@@ -47,7 +47,11 @@ pub fn load(root: &Path) -> Result<Config> {
         !guilds.is_empty(),
         "nenhum servidor autorizado; crie config/guilds/servidor.toml a partir do exemplo"
     );
-    Ok(Config { global, guilds })
+    Ok(Config {
+        root: root.canonicalize()?,
+        global,
+        guilds,
+    })
 }
 fn parse<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let content = fs::read_to_string(path)
@@ -55,7 +59,7 @@ fn parse<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     toml::from_str(&content).with_context(|| format!("TOML inválido: {}", path.display()))
 }
 
-pub(super) fn merge(base: &mut toml::Value, overlay: toml::Value) {
+pub(crate) fn merge(base: &mut toml::Value, overlay: toml::Value) {
     match (base, overlay) {
         (toml::Value::Table(base), toml::Value::Table(overlay)) => {
             for (key, value) in overlay {
@@ -69,7 +73,7 @@ pub(super) fn merge(base: &mut toml::Value, overlay: toml::Value) {
         (base, overlay) => *base = overlay,
     }
 }
-pub(super) fn optional(path: &Path) -> Result<toml::Value> {
+pub(crate) fn optional(path: &Path) -> Result<toml::Value> {
     match fs::read_to_string(path) {
         Ok(text) => {
             toml::from_str(&text).with_context(|| format!("TOML inválido: {}", path.display()))
@@ -86,6 +90,10 @@ fn cache_legacy(guild: &mut GuildConfig) -> Result<()> {
         let doc =
             crate::services::storage::template(Path::new(&root), guild, kind, &Default::default())?;
         guild.contents.insert(kind.into(), doc);
+        guild.content_sources.insert(
+            kind.into(),
+            "templates legados (cache da inicialização)".into(),
+        );
     }
     Ok(())
 }
@@ -148,41 +156,47 @@ fn load_registered(root: &Path, global: GlobalConfig) -> Result<Config> {
         let mut guild: GuildConfig = config
             .try_into()
             .with_context(|| format!("Configuração inválida: {alias}"))?;
-        guild.profile.load_avatar(&folder)?;
-        let mut commands = toml::Value::Table(Default::default());
+        let specific_profile = optional(&folder.join("config.toml"))?;
+        let avatar_folder = if specific_profile
+            .get("profile")
+            .and_then(|v| v.get("avatar"))
+            .is_some()
+        {
+            &folder
+        } else {
+            &defaults
+        };
+        guild.profile.load_avatar(avatar_folder)?;
         for path in [defaults.join("commands.toml"), folder.join("commands.toml")] {
-            merge(&mut commands, optional(&path)?);
-        }
-        #[derive(Deserialize, Default)]
-        #[serde(default, deny_unknown_fields)]
-        struct Commands {
-            commands: HashMap<String, bool>,
-        }
-        guild.commands = commands.try_into::<Commands>()?.commands;
-        for key in guild.commands.keys() {
-            ensure!(
-                availability::COMMANDS.contains(&key.as_str()),
-                "Comando desconhecido: {key} ({alias})"
-            );
+            availability::apply_commands(&mut guild, optional(&path)?)
+                .with_context(|| format!("Comandos inválidos: {}", path.display()))?;
         }
         for kind in ["rules", "announcements", "links"] {
-            let mut value = toml::Value::try_from(crate::services::content::Document {
-                title: kind.into(),
-                color: 0x5865f2,
-                ..Default::default()
-            })?;
-            for path in [
-                defaults.join(format!("{kind}.toml")),
-                folder.join(format!("{kind}.toml")),
-            ] {
-                merge(&mut value, optional(&path)?);
-            }
-            let doc: crate::services::content::Document = value
-                .try_into()
-                .with_context(|| format!("Conteúdo inválido: {alias}/{kind}"))?;
-            doc.embeds(kind)
-                .with_context(|| format!("Conteúdo inválido: {alias}/{kind}"))?;
+            let (value, source) = crate::services::catalog::read_content(root, &guild, kind)?;
+            let doc = if kind == "links" {
+                let links = crate::services::catalog::parse_links(value)?;
+                links.validate(&guild)?;
+                let doc = links
+                    .boards
+                    .first()
+                    .map(|b| b.document())
+                    .unwrap_or_else(|| crate::services::content::Document {
+                        title: "Links".into(),
+                        color: 0x5865f2,
+                        ..Default::default()
+                    });
+                guild.link_boards = Some(links.boards);
+                doc
+            } else {
+                let doc: crate::services::content::Document = value
+                    .try_into()
+                    .with_context(|| format!("Conteúdo inválido: {alias}/{kind}"))?;
+                doc.embeds(kind)
+                    .with_context(|| format!("Conteúdo inválido: {alias}/{kind}"))?;
+                doc
+            };
             guild.contents.insert(kind.into(), doc);
+            guild.content_sources.insert(kind.into(), source);
         }
         if guild.enabled {
             guild.validate(global.modules)?;
@@ -191,5 +205,9 @@ fn load_registered(root: &Path, global: GlobalConfig) -> Result<Config> {
         }
         guilds.insert(guild.guild_id, guild);
     }
-    Ok(Config { global, guilds })
+    Ok(Config {
+        root: root.canonicalize()?,
+        global,
+        guilds,
+    })
 }

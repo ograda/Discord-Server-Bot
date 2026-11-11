@@ -7,6 +7,7 @@ use poise::serenity_prelude as s;
     slash_command,
     guild_only,
     ephemeral,
+    subcommand_required,
     subcommands("add", "remove"),
     default_member_permissions = "MANAGE_ROLES"
 )]

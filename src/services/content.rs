@@ -2,7 +2,7 @@ use anyhow::{Result, ensure};
 use poise::serenity_prelude as s;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Document {
     pub title: String,
@@ -14,7 +14,7 @@ pub struct Document {
     pub entries: Vec<Entry>,
     pub text: String,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Entry {
     pub id: String,

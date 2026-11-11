@@ -21,6 +21,7 @@ tempfile = "3"
 icu_normalizer = { version = "2.4", default-features = false, features = ["compiled_data"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 toml = "0.8"
+toml_edit = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
