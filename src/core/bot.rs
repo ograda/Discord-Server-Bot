@@ -4,6 +4,11 @@ use poise::serenity_prelude as s;
 use std::time::Instant;
 
 pub async fn run(token: String, config: Config) -> Result<(), Error> {
+    let intents = config.global.gateway_intents();
+    tracing::info!(
+        guild_members = config.global.intents.guild_members,
+        "Intents de Gateway configuradas; operações em massa exigem habilitação no Developer Portal"
+    );
     let profile_client = crate::services::profile::Client::new()?;
     let store = crate::services::storage::Store::open(
         std::env::var("DATA_DIR")
@@ -60,13 +65,15 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
                         }
 
                         poise::FrameworkError::ArgumentParse { ctx, .. } => {
-                            let error = anyhow::anyhow!("Falha de validação dos parâmetros. Use as escolhas da ação e, para avatar, o campo imagem do tipo Attachment. Se a interface estiver antiga, reabra o comando após o registro atualizado.");
+                            let error = if ctx.command().name == "role" || ctx.command().name == "role-all" {
+                                anyhow::anyhow!("Falha de validação dos parâmetros de cargos. Selecione ação e cargo nos campos nativos; /role também exige um usuário no seletor USER. Não use texto ou all para identificar usuários. Reabra o comando após o registro atualizado.")
+                            } else { anyhow::anyhow!("Falha de validação dos parâmetros. Use as escolhas da ação e, para avatar, o campo imagem do tipo Attachment. Se a interface estiver antiga, reabra o comando após o registro atualizado.") };
                             let message = super::diagnostics::failure(ctx, &error);
                             let _ = ctx.send(poise::CreateReply::default().content(message).ephemeral(true)).await;
                         }
                         poise::FrameworkError::CommandStructureMismatch { ctx, description, .. } => {
                             tracing::warn!(guild = ?ctx.interaction.guild_id, module = ctx.command.name, stage = "slash_schema", cause = description, "Registro slash incompatível com os parâmetros recebidos");
-                            let _ = poise::Context::Application(ctx).send(poise::CreateReply::default().content("O registro deste comando está desatualizado. Reinicie o bot atualizado para registrar os comandos da guilda e reabra o comando; avatar utiliza o parâmetro imagem do tipo Attachment.").ephemeral(true)).await;
+                            let _ = poise::Context::Application(ctx).send(poise::CreateReply::default().content("O registro deste comando está desatualizado. Reinicie o bot atualizado para registrar os comandos da guilda e reabra o comando com os tipos e escolhas atuais. Usuário e cargo usam os seletores nativos; avatar utiliza Attachment.").ephemeral(true)).await;
                         }
 
                         other => {
@@ -117,6 +124,7 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
                     tracing::info!(guild = %id, "Comandos registrados");
                 }
                 Ok(Data {
+                    role_locks: Default::default(),
                     catalog,
                     profile_client,
                     store,
@@ -127,7 +135,7 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
             })
         })
         .build();
-    let mut client = s::ClientBuilder::new(token, s::GatewayIntents::GUILDS)
+    let mut client = s::ClientBuilder::new(token, intents)
         .framework(framework)
         .await?;
     let manager = client.shard_manager.clone();

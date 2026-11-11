@@ -5,6 +5,7 @@ pub fn all() -> Vec<poise::Command<super::Data, Error>> {
     vec![
         ping(),
         modules::roles::role(),
+        modules::roles::role_all(),
         modules::content_commands::rules(),
         modules::content_commands::links(),
         modules::content_commands::announcement(),

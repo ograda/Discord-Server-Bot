@@ -52,6 +52,7 @@ pub fn authorize(
     owner || (has_permission && (!restricted || configured_role))
 }
 
+#[derive(Clone)]
 pub struct Authority {
     pub guild: s::PartialGuild,
     pub actor: s::Member,

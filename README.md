@@ -6,13 +6,15 @@ O objetivo é evoluir administração, automações e integrações incrementalm
 
 ## V1.1 — interface simplificada
 
-Sete comandos raiz, com escolhas nativas opcionais em `ação`. Apenas `/role`
-usa subcomandos reais. As respostas administrativas são efêmeras.
+Oito comandos raiz, com escolhas nativas em `ação`. `/role` e `/role-all` exigem
+ação explícita; os demais comandos com ação têm um padrão. Não há subcomandos
+nativos. As respostas administrativas são efêmeras.
 
 | Comando | Sem selecionar ação | Outras operações |
 |---|---|---|
 | `/ping` | Pong | `modo:status` (versão, uptime, conexão e execução) |
-| `/role` | Nenhuma operação | `add`, `remove` como subcomandos |
+| `/role` | Ação obrigatória | `ação:add/remove`, `usuário` USER e `cargo` ROLE obrigatórios |
+| `/role-all` | Ação obrigatória, com confirmação | `ação:add/remove`, `cargo` ROLE; humanos elegíveis |
 | `/rules` | Prévia privada | `ação:publish`, `update`, `reset`, `remove` |
 | `/links` | Prévia do quadro; menu se houver vários | `ação:publish`, `update`, `reset`, `add`, `remove` |
 | `/announcement` | Criar anúncio por mensagem ou formulário | `ação:edit`, `remove`; seleção/autocomplete |
@@ -29,13 +31,14 @@ preservados em backup e arquivados antes da descontinuação dessa precedência.
 Message IDs e referências operacionais continuam no JSON por Guild ID.
 
 Comandos administrativos exigem Gerenciar Mensagens; Profile exige Gerenciar
-Servidor; Role exige Gerenciar Cargos. Também é exigido o cargo moderador
+Servidor; Role exige Gerenciar Cargos e Role-all exige também Gerenciar Servidor.
+Também é exigido o cargo moderador
 configurado, se houver. O dono da guilda dispensa essas restrições pessoais.
 As permissões do bot e a hierarquia continuam obrigatórias. O usuário autorizado
 não precisa de permissão direta de escrita no canal de anúncios. Menções são
 suprimidas. O perfil global e outras guildas não são alterados.
 
-Veja o [guia de comandos](docs/commands.md), [V1.1](docs/v1.1.md),
+Veja o [guia de comandos](docs/commands.md), o [guia de cargos individuais e em massa](docs/roles.md), [V1.1](docs/v1.1.md),
 [arquitetura](docs/architecture.md) e [multiguild](docs/multiguild.md).
 
 ## Stack e estrutura
@@ -95,8 +98,10 @@ chmod 600 .env
 1. Crie uma aplicação no [Developer Portal](https://discord.com/developers/applications)
    e configure seu bot. Desative **Public Bot**, mantendo a instalação privada.
 2. Gere o token na seção Bot e coloque-o somente no `.env` local.
-3. Mantenha desabilitadas todas as **Privileged Gateway Intents**. O código usa
-   apenas `GUILDS`; não necessita Message Content, Presence ou Server Members.
+3. Para uso individual, mantenha as intents privilegiadas desabilitadas: `/role`
+   não precisa de Server Members. Para `/role-all`, habilite **Server Members Intent**
+   no Portal e `[intents] guild_members = true` no TOML global. Não habilite Presence
+   ou Message Content; veja o [guia de cargos](docs/roles.md).
 4. Configure instalação no servidor com scopes `bot` e `applications.commands`.
    Convide a aplicação apenas para seus servidores usando uma conta autorizada.
 5. Conceda ao bot **Ver canais** e **Enviar mensagens** para anúncios, e
@@ -199,7 +204,7 @@ CI executa esses checks em pushes e pull requests para `main`, sem deploy ou
 publicação de imagens. Testes locais cobrem parsing, validação, duplicidade,
 seleção de servidor e regras de autorização; não precisam de token.
 
-Em um servidor de desenvolvimento, valide manualmente: os sete comandos,
+Em um servidor de desenvolvimento, valide manualmente: os oito comandos,
 anúncio em canal permitido e negado, menções sem notificação, usuário sem
 permissão/cargo, cargo acima do bot, cargo gerenciado, módulo desabilitado,
 servidor não autorizado, reconexão e encerramento. Teste com cargos descartáveis.

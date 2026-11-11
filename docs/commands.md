@@ -1,7 +1,7 @@
 # Guia de comandos — V1.1
 
-Somente `/role` usa subcomandos reais. Os demais comandos com ação padrão usam
-uma escolha opcional `ação`; Ping utiliza `modo`. Não há `/status`, `/announcements`,
+Não há subcomandos reais. `/role` e `/role-all` exigem `ação`; os comandos com
+ação padrão usam uma escolha opcional `ação`. Ping utiliza `modo`. Não há `/status`, `/announcements`,
 `/profile show`, `/profile apply` ou subcomandos nativos em Rules/Links.
 A lista de choices é filtrada por guilda. Uma ação padrão desligada não é
 substituída silenciosamente: selecione explicitamente outra permitida.
@@ -9,7 +9,8 @@ substituída silenciosamente: selecione explicitamente outra permitida.
 | Comando | Padrão | Choices |
 |---|---|---|
 | `/ping` | `simples` | `modo:simples`, `status` |
-| `/role` | Nenhum | `/role add`, `/role remove` |
+| `/role` | Nenhum; três parâmetros obrigatórios | `ação:add/remove`, `usuário` USER, `cargo` ROLE |
+| `/role-all` | Nenhum; confirmação obrigatória | `ação:add/remove`, `cargo` ROLE; sem usuário |
 | `/rules` | `preview` | `ação:preview`, `publish`, `update`, `reset`, `remove` |
 | `/links` | `preview` | `ação:preview`, `publish`, `update`, `reset`, `add`, `remove` |
 | `/announcement` | `create` | `ação:create`, `edit`, `remove` |
@@ -113,7 +114,7 @@ valida quais podem ser usados; parâmetros de outra ação são rejeitados. Não
 `imagem` preenchida ao executar Revert, por exemplo.
 
 Rules, Links e anúncios exigem Gerenciar Mensagens; Profile exige Gerenciar
-Servidor; Role exige Gerenciar Cargos. Cargo moderador configurado e hierarquias
+Servidor; Role exige Gerenciar Cargos; Role-all exige também Gerenciar Servidor. Cargo moderador configurado e hierarquias
 continuam valendo. As permissões de canal são verificadas para o bot, permitindo
 uso por um administrador autorizado que não possa escrever diretamente no destino.
 
@@ -121,3 +122,35 @@ Se uma publicação sumiu do Discord, Publish preserva suas referências e infor
 404. Execute Remove e confirme para reconciliar somente aquele registro antes
 de publicar de novo. Se `pending` indicar resultado HTTP incerto, confira o canal
 e o estado antes de qualquer repetição; mantenha backups e não apague o JSON.
+
+## Cargos individuais e em massa
+
+```text
+/role ação:add usuário:@Pessoa cargo:@Participante
+/role ação:remove usuário:@Pessoa cargo:@Participante
+/role-all ação:add cargo:@Participante
+/role-all ação:remove cargo:@Participante
+```
+
+Usuário e cargo são os seletores nativos USER/ROLE. O comando individual confirma
+por REST que o usuário pertence à guilda e funciona sem a intent GUILD_MEMBERS.
+Não existe parâmetro de usuário STRING nem valor especial `all`.
+
+Role-all é opt-in em `[commands] role-all = true` e requer a intent de membros no
+TOML global e no Portal. Lista todos os membros com paginação REST, conta os humanos
+elegíveis e mostra confirmação. Ignora bots, estado já desejado, dono/autor/bot,
+membros em triagem e alvos fora da hierarquia. Cargos gerenciados/especiais,
+protegidos e administrativos em massa são bloqueados.
+
+Só os usuários do grupo confirmado são processados, de forma sequencial e
+assíncrona, usando rate limits do Serenity. Permissões, cargo e membro são
+reconsultados antes de cada alteração. Perda de autorização/erros gerais param
+a execução; falhas individuais são contadas. O resumo distingue sucessos,
+falhas, ignorados e não processados. Não há reversão automática de sucessos.
+
+Uma operação/confirmação de cargos bloqueia outra da mesma guilda, inclusive o
+comando individual. Outras guildas continuam independentes. Progresso e resumo
+ficam em `state.json.role_operations` e nos logs, sem tokens ou dados de imagens.
+A resposta é atualizada enquanto o token de interação é válido. Se a operação
+ultrapassar esse prazo, confira o resumo persistido/logs; a expiração da resposta
+não interrompe o trabalho confirmado. Veja [configuração e recuperação](roles.md).

@@ -7,7 +7,7 @@ JSON existente. Não há banco, scheduler, webhooks, painel ou serviço adiciona
 
 - `config`: registro multiguild, Serde/TOML, validação de nomes/IDs, defaults e flags.
 - `core`: inicialização, registro slash por guilda, autorização e diagnósticos.
-- `modules`: interface dos sete comandos; somente Role possui subcomandos.
+- `modules`: interface dos oito comandos; escolhas nativas, sem subcomandos.
 - `services/content`: o mesmo construtor de embeds e validação de limites/URLs.
 - `services/catalog`: snapshots mutáveis somente de Rules/Links, com recarga explícita.
 - `services/publishing`: prévia/confirmar e transação de publicação da mensagem original.
@@ -40,10 +40,11 @@ nos caminhos de conteúdo são bloqueados.
 
 ## Comandos e autorização
 
-As sete raízes são Ping, Role, Rules, Links, Announcement, Announce e Profile.
+As oito raízes são Ping, Role, Role-all, Rules, Links, Announcement, Announce e Profile.
 Choices opcionais permitem executar a raiz com a ação padrão. Parâmetros
 condicionais são opcionais no esquema e validados por ação no runtime.
-Somente Role mantém subcomandos reais; sua raiz não realiza operação.
+Role e Role-all exigem ação explícita e seletores nativos; não têm ação padrão
+nem subcomandos. Role recebe USER/ROLE, enquanto Role-all recebe somente ROLE.
 
 Flags de raiz, flags de ação, módulo e status da guilda são considerados no
 registro e na execução. Choices por guilda preservam seus índices originais do
@@ -55,7 +56,8 @@ A autorização administrativa consulta membros/cargos via REST: permissão exig
 mais cargo moderador se configurado. O dono dispensa suas restrições pessoais.
 O bot sempre verifica suas próprias permissões, hierarquia e acesso ao canal.
 Não é exigida permissão direta de envio do autor no canal de anúncios.
-Somente intent `GUILDS` é solicitada; nenhuma intent privilegiada.
+A intent base é `GUILDS`. `GUILD_MEMBERS` é adicionada somente com opt-in global
+para operações em massa; o comando individual não depende dessa intent.
 
 ## Publicação e estado
 
@@ -104,3 +106,24 @@ O processo encerra shards em Ctrl+C/SIGTERM. Docker mantém usuário 10001,
 filesystem somente leitura, sem portas/capabilities e sem privilégios adicionais.
 Apenas o volume de dados e a árvore de guildas permitem escrita; os defaults e o
 registro continuam somente leitura. Veja permissões e backups em [multiguild](multiguild.md).
+
+## Cargos e concorrência
+
+`services/roles` concentra política de autorização/hierarquia, paginação completa
+por REST e executor sequencial. `modules/roles` expõe duas raízes com choices
+obrigatórias e confirmação vinculada ao autor para a operação em massa.
+`Data.role_locks` reserva a guilda desde a contagem/confirmação até a conclusão;
+o mesmo lock cobre a operação individual. Não usa o lock de armazenamento durante
+chamadas HTTP ou espera pela confirmação, preservando os outros serviços.
+
+A operação em massa reconsulta guilda/cargos, autor, bot e cada alvo antes da
+mutação. O endpoint é PUT/DELETE do cargo de um único membro, sem substituir o
+array inteiro de cargos. O cliente padrão do Serenity controla buckets e 429.
+Não há paralelismo irrestrito, reenvio cego nem retomada automática após reinício.
+
+A operação é registrada em `role_operations` no JSON da guilda antes de alterar
+cargos; salva checkpoints a cada 25 candidatos e um resumo final. Logs detalham
+sucessos, falhas e ignorados por ID. O resumo inclui falhas e não processados
+quando a execução é interrompida. Atualizações do JSON usam o mutex e a gravação
+atômica existentes, sem remover dados dos outros módulos. Uma parada abrupta pode
+deixar o último checkpoint com status running; ele não dispara execução no startup.

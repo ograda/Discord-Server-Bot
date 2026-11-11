@@ -60,7 +60,7 @@ fn fixture() -> tempfile::TempDir {
 }
 
 #[test]
-fn seven_roots_optional_choices_and_attachment_schema() {
+fn roots_native_roles_optional_choices_and_attachment_schema() {
     let all = commands::all();
     assert_eq!(
         all.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
@@ -70,10 +70,14 @@ fn seven_roots_optional_choices_and_attachment_schema() {
     for command in payload.as_array().unwrap() {
         let name = command["name"].as_str().unwrap();
         let options = command["options"].as_array().unwrap();
-        if name == "role" {
-            assert_eq!(options.len(), 2);
-            assert!(options.iter().all(|o| o["type"] == 1));
-            assert_eq!(availability::default_action("role"), None);
+        if name == "role" || name == "role-all" {
+            assert_eq!(options.len(), if name == "role" { 3 } else { 2 });
+            assert!(
+                options
+                    .iter()
+                    .all(|o| o["required"] == true && o["type"] != 1 && o["type"] != 3)
+            );
+            assert_eq!(availability::default_action(name), None);
         } else {
             assert!(options.iter().all(|o| o["type"] != 1 && o["type"] != 2));
             if name != "announce" {
@@ -208,7 +212,8 @@ fn guild_filters_preserve_choice_values_and_disabled_defaults_require_explicit_a
         .iter()
         .find(|c| c["name"] == "role")
         .unwrap();
-    assert_eq!(role["options"].as_array().unwrap().len(), 1);
+    assert_eq!(role["options"].as_array().unwrap().len(), 3);
+    assert_eq!(role["options"][0]["choices"].as_array().unwrap().len(), 1);
     write(
         dir.path(),
         "guilds/One/commands.toml",

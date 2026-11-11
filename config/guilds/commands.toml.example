@@ -1,5 +1,7 @@
 # Copie para config/guilds/<nome>/commands.toml; inclua somente diferenças.
 [commands]
+role = true
+role-all = false # Habilite explicitamente para operações em massa confirmadas.
 # rules = false # desabilita o comando inteiro nesta guilda
 
 [actions.rules]

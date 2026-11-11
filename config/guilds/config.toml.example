@@ -15,6 +15,7 @@ events = "444444444444444444"
 
 [roles]
 moderators = []
+protected = [] # IDs de cargos que não podem ser alterados pelo bot.
 
 [profile]
 nickname = "Bot da Comunidade"

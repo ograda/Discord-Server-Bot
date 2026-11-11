@@ -4,6 +4,7 @@ use anyhow::Context as _;
 pub const ROOTS: &[&str] = &[
     "ping",
     "role",
+    "role-all",
     "rules",
     "links",
     "announcement",
@@ -17,6 +18,9 @@ pub const COMMANDS: &[&str] = &[
     "role",
     "role.add",
     "role.remove",
+    "role-all",
+    "role-all.add",
+    "role-all.remove",
     "rules",
     "rules.preview",
     "rules.publish",
@@ -62,7 +66,7 @@ impl GuildConfig {
             .map_or((path, None), |(r, a)| (r, Some(a)));
         let active = match root {
             "ping" => true,
-            "role" => modules.administration && modules.roles,
+            "role" | "role-all" => modules.administration && modules.roles,
             "rules" => modules.administration && modules.rules,
             "links" => modules.administration && modules.links,
             "announce" | "announcement" => {
@@ -72,7 +76,11 @@ impl GuildConfig {
             _ => false,
         };
         active
-            && self.commands.get(root).copied().unwrap_or(true)
+            && self
+                .commands
+                .get(root)
+                .copied()
+                .unwrap_or(root != "role-all")
             && action.is_none_or(|action| {
                 self.actions
                     .get(root)
@@ -179,12 +187,6 @@ pub fn registered(
     commands.retain_mut(|command| {
         if !guild.command_enabled(&command.name, defaults) {
             return false;
-        }
-        if command.name == "role" {
-            command
-                .subcommands
-                .retain(|c| guild.command_enabled(&format!("role.{}", c.name), defaults));
-            return !command.subcommands.is_empty();
         }
         if command.name == "announce" {
             return true;

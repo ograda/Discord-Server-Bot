@@ -12,11 +12,28 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GlobalConfig {
+    #[serde(default)]
+    pub intents: Intents,
     pub app_name: String,
     pub log_level: String,
     pub modules: Modules,
     #[serde(default)]
     pub guilds: Option<HashMap<String, GuildRegistration>>,
+}
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Intents {
+    pub guild_members: bool,
+}
+impl GlobalConfig {
+    pub fn gateway_intents(&self) -> poise::serenity_prelude::GatewayIntents {
+        use poise::serenity_prelude::GatewayIntents;
+        let mut intents = GatewayIntents::GUILDS;
+        if self.intents.guild_members {
+            intents |= GatewayIntents::GUILD_MEMBERS;
+        }
+        intents
+    }
 }
 
 #[derive(Debug, serde::Serialize, Deserialize)]
@@ -92,6 +109,8 @@ pub struct Channels {
 pub struct Roles {
     #[serde(default)]
     pub moderators: Vec<RoleId>,
+    #[serde(default)]
+    pub protected: Vec<RoleId>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,6 +165,11 @@ impl GuildConfig {
         ensure!(
             self.roles.moderators.iter().all(|id| ids.insert(id)),
             "cargo moderador duplicado"
+        );
+        ids.clear();
+        ensure!(
+            self.roles.protected.iter().all(|id| ids.insert(id)),
+            "cargo protegido duplicado"
         );
         Ok(())
     }

@@ -1,6 +1,11 @@
 app_name = "Discord Server Bot"
 log_level = "info"
 
+# Operações em massa também exigem Server Members Intent no Developer Portal.
+# /role individual funciona sem a intent privilegiada.
+[intents]
+guild_members = false
+
 # Padrões de módulos antigos são mantidos como fallback de compatibilidade.
 # Prefira config/guilds/defaults/config.toml para os padrões compartilhados.
 [modules]

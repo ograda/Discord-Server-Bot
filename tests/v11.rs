@@ -225,10 +225,11 @@ fn validates_links_and_suppresses_mentions() {
 fn slash_groups_expose_all_expected_operations() {
     use discord_server_bot::core::commands;
     let commands = commands::all();
-    assert_eq!(commands.len(), 7);
+    assert_eq!(commands.len(), 8);
     for command in commands {
-        if command.name == "role" {
-            assert_eq!(command.subcommands.len(), 2);
+        if command.name == "role" || command.name == "role-all" {
+            assert!(command.subcommands.is_empty());
+            assert!(command.parameters.iter().all(|p| p.required));
         } else {
             assert!(command.subcommands.is_empty());
             assert!(command.ephemeral);

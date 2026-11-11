@@ -51,6 +51,7 @@ Exemplos estão em `config/guilds/*.toml.example`.
 [commands]
 ping = true
 role = true
+role-all = false # habilite independentemente somente nas guildas desejadas
 rules = true
 links = true
 announcement = true
@@ -75,7 +76,7 @@ Consulte [defaults completos](../config/guilds/defaults/commands.toml). Ausênci
 herdam o default; se ambos faltarem, a ação é habilitada respeitando o módulo.
 Uma flag de ação não reabilita uma raiz/módulo desabilitado. A ação padrão só roda
 se estiver habilitada; caso contrário, escolha outra explicitamente. O registro
-por guilda omite raízes desabilitadas, choices desligadas e Role sem ações.
+por guilda omite raízes desabilitadas, choices desligadas e comandos sem ações disponíveis.
 A execução confere novamente essas flags.
 
 Chaves antigas como `"rules.publish"`, `status` e `"announcements.delete"` são
@@ -158,3 +159,32 @@ cargo run --bin migrate-config -- --check config
 A migração valida uma árvore temporária antes de gravar, conserva fontes e cria
 `default.toml.pre-multiguild`. Não a execute novamente em instalação já registrada.
 O conteúdo/estado JSON tem sua migração separada e automática no startup novo.
+
+## Role-all por guilda e intent global
+
+As raízes são independentes em commands.toml:
+
+```toml
+[commands]
+role = true
+role-all = true
+
+[actions.role-all]
+add = true
+remove = true
+```
+
+Role-all fica desligado por padrão. A intent é uma característica da conexão da
+aplicação e fica em `config/default.toml`, fora de qualquer tabela de guilda:
+
+```toml
+[intents]
+guild_members = true
+```
+
+Habilite também Server Members Intent no Developer Portal e reinicie. Não é
+necessária para Role individual. Não altere configurações privadas automaticamente
+para habilitar essa opção. Cada guilda pode definir `[roles] protected = ["ID"]`;
+essa proteção vale para ambos os comandos. Em massa, cargos moderadores e cargos
+com Administrator/Manage Guild/Manage Roles também são protegidos.
+Os resultados de cada guilda ficam somente em seu próprio `role_operations`.

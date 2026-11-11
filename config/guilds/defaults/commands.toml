@@ -2,6 +2,7 @@
 [commands]
 ping = true
 role = true
+role-all = false # Exige opt-in e a intent de membros para operações em massa.
 rules = true
 links = true
 announcement = true
@@ -13,6 +14,10 @@ simples = true
 status = true
 
 [actions.role]
+add = true
+remove = true
+
+[actions.role-all]
 add = true
 remove = true
 
