@@ -1,0 +1,25 @@
+# Entradas ausentes são habilitadas por padrão, respeitando o módulo.
+[commands]
+ping = true
+status = true
+announce = true
+"role.add" = true
+"role.remove" = true
+"announcements.create" = true
+"announcements.edit" = true
+"announcements.list" = true
+"announcements.delete" = true
+"rules.preview" = true
+"rules.publish" = true
+"rules.update" = true
+"rules.edit" = true
+"rules.add" = true
+"rules.remove" = true
+"rules.list" = true
+"links.preview" = true
+"links.publish" = true
+"links.update" = true
+"links.edit" = true
+"links.add" = true
+"links.remove" = true
+"links.list" = true

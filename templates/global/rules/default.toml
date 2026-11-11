@@ -1,0 +1,65 @@
+title = "📜 Regras da Comunidade"
+description = "Bem-vindo! Nosso objetivo é manter um ambiente respeitoso, organizado e divertido para todos. Ao permanecer no servidor, você concorda com estas regras."
+color = 5793266
+footer = "ℹ️ Dúvidas? Procure a moderação.\n\nAproveite o servidor!"
+
+[[entries]]
+id = "respeito"
+title = "Respeite os outros membros"
+description = "Trate todos com respeito, independentemente de experiência, habilidade, idade ou preferências."
+emoji = "🤝"
+order = 1
+[[entries]]
+id = "discriminacao"
+title = "Discriminação e assédio não são permitidos"
+description = "São proibidos discursos de ódio, racismo, xenofobia, homofobia, sexismo, ameaças, assédio e ataques discriminatórios de qualquer natureza."
+emoji = "🚫"
+order = 2
+[[entries]]
+id = "brincadeiras"
+title = "Saiba respeitar os limites das brincadeiras"
+description = "Humor, memes e provocações amigáveis são bem-vindos. Entretanto, se alguém demonstrar desconforto ou pedir para parar, respeite."
+emoji = "🎭"
+order = 3
+[[entries]]
+id = "privacidade"
+title = "Respeite a privacidade"
+description = "Não divulgue informações pessoais, conversas privadas, fotografias, gravações ou outros conteúdos de terceiros sem autorização. Também não são permitidas tentativas de exposição ou constrangimento de outros membros."
+emoji = "🔒"
+order = 4
+[[entries]]
+id = "canais"
+title = "Utilize os canais adequadamente"
+description = "Respeite a finalidade dos canais de texto e voz. Evite spam, flood, mensagens repetitivas, uso excessivo de menções e conteúdos que prejudiquem as conversas. Utilize os canais específicos de cada jogo sempre que possível."
+emoji = "📋"
+order = 5
+[[entries]]
+id = "publicidade"
+title = "Publicidade e divulgação"
+description = "Não divulgue servidores, comunidades, produtos, serviços, links de indicação ou conteúdos promocionais sem autorização da moderação. Compartilhar conteúdo relevante para a comunidade é permitido quando respeitar a finalidade do canal."
+emoji = "📢"
+order = 6
+[[entries]]
+id = "seguranca"
+title = "Segurança e integridade"
+description = "São proibidos golpes, links maliciosos, phishing, tentativas de roubo de contas e outras atividades fraudulentas. Não utilize o servidor para promover práticas que violem as regras do Discord ou dos jogos envolvidos."
+emoji = "🛡️"
+order = 7
+[[entries]]
+id = "voz"
+title = "Convivência nos canais de voz"
+description = "Evite gritos excessivos, microfones com ruídos constantes, reprodução de sons abusivos e interrupções deliberadas. Respeite conversas, atividades em andamento e os pedidos dos participantes."
+emoji = "🎙️"
+order = 8
+[[entries]]
+id = "moderacao"
+title = "Respeite a moderação"
+description = "Siga as orientações da equipe responsável pelo servidor. Infrações poderão resultar em advertências, restrições temporárias ou banimento, conforme a gravidade e a reincidência. Caso discorde de alguma decisão, procure a moderação de forma privada e respeitosa."
+emoji = "🔨"
+order = 9
+[[entries]]
+id = "diversao"
+title = "Se divirta"
+description = "Todos estamos aqui com um objetivo comum: aproveitar nosso tempo livre! Um ótimo jogo para você, e lembre-se sempre de se divertir!"
+emoji = "🎉"
+order = 10

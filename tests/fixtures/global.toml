@@ -1,0 +1,6 @@
+app_name = "Discord Server Bot"
+log_level = "info"
+[modules]
+administration = true
+messaging = true
+roles = true

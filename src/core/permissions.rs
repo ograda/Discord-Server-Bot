@@ -7,11 +7,14 @@ pub fn guild_config(ctx: Context<'_>) -> Result<&GuildConfig, Error> {
     let id = ctx
         .guild_id()
         .context("Comando disponível somente em servidores")?;
-    ctx.data()
+    let guild = ctx
+        .data()
         .config
         .guilds
         .get(&id)
-        .context("Servidor não autorizado")
+        .context("Servidor não autorizado")?;
+    ensure!(guild.enabled, "Servidor desabilitado");
+    Ok(guild)
 }
 
 pub fn authorize(
@@ -54,11 +57,32 @@ pub async fn administrative(
         ),
         "Você não possui a permissão ou cargo administrativo exigido"
     );
-    ensure!(
-        guild.member_permissions(&bot).contains(required),
-        "O bot não possui a permissão necessária"
-    );
     Ok(Authority { guild, actor, bot })
+}
+
+pub fn ensure_permissions(actual: s::Permissions, required: s::Permissions) -> Result<(), Error> {
+    ensure!(
+        actual.contains(required),
+        "Permissões operacionais ausentes no bot: {:?}",
+        required & !actual
+    );
+    Ok(())
+}
+
+pub fn ensure_bot_permissions(auth: &Authority, required: s::Permissions) -> Result<(), Error> {
+    ensure_permissions(auth.guild.member_permissions(&auth.bot), required)
+}
+
+pub fn ensure_bot_channel_permissions(
+    auth: &Authority,
+    channel: &s::GuildChannel,
+    required: s::Permissions,
+) -> Result<(), Error> {
+    ensure!(
+        channel.guild_id == auth.guild.id,
+        "Canal pertence a outro servidor"
+    );
+    ensure_permissions(auth.guild.user_permissions_in(channel, &auth.bot), required)
 }
 
 pub fn higher(guild: &s::PartialGuild, member: &s::Member, role: &s::Role) -> bool {
@@ -72,6 +96,24 @@ pub fn higher(guild: &s::PartialGuild, member: &s::Member, role: &s::Role) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn operational_permissions_are_independent() {
+        let send = s::Permissions::VIEW_CHANNEL | s::Permissions::SEND_MESSAGES;
+        assert!(ensure_permissions(send, send).is_ok());
+        assert!(ensure_permissions(s::Permissions::VIEW_CHANNEL, send).is_err());
+        assert!(ensure_permissions(send, send | s::Permissions::EMBED_LINKS).is_err());
+        assert!(
+            ensure_permissions(
+                send | s::Permissions::EMBED_LINKS,
+                send | s::Permissions::EMBED_LINKS
+            )
+            .is_ok()
+        );
+        assert!(ensure_permissions(send, s::Permissions::MANAGE_ROLES).is_err());
+        assert!(
+            ensure_permissions(s::Permissions::MANAGE_ROLES, s::Permissions::MANAGE_ROLES).is_ok()
+        );
+    }
     #[test]
     fn authorization_matrix() {
         assert!(authorize(false, true, true, false));

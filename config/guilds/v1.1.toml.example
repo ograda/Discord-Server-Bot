@@ -1,0 +1,30 @@
+guild_id = "123456789012345678"
+alias = "minha-comunidade"
+name = "Minha Comunidade"
+
+[modules]
+administration = true
+messaging = true
+roles = true
+rules = true
+links = true
+
+[channels]
+announcements = "111111111111111111"
+rules = "222222222222222222"
+links = "333333333333333333"
+moderation_logs = "444444444444444444"
+
+[channels.custom]
+events = "555555555555555555"
+
+[roles]
+moderators = []
+
+[messaging]
+enabled = true
+
+[templates]
+announcements = "announcements/default"
+rules = "rules/default"
+links = "links/default"

@@ -1,5 +1,7 @@
 # Validação da implementação — 10/11/2026
 
+Registro histórico da V1.0. Para o estado atual, consulte [validação V1.1](validation-v1.1.md).
+
 Ambiente: Windows, Rust/Cargo 1.98.1.
 
 | Verificação executada | Resultado |

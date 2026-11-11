@@ -1,5 +1,10 @@
-app_name = "Discord Server Bot"
+app_name = "Ograda Solutions Bot"
 log_level = "info"
+
+[guilds.guild-817165069724024842]
+enabled = true
+id = "817165069724024842"
+name = "receita federal"
 
 [modules]
 administration = true

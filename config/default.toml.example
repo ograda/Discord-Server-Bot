@@ -1,0 +1,19 @@
+app_name = "Discord Server Bot"
+log_level = "info"
+
+# Padrões de módulos antigos são mantidos como fallback de compatibilidade.
+# Prefira config/guilds/defaults/config.toml para os padrões compartilhados.
+[modules]
+administration = true
+messaging = false
+roles = true
+
+[guilds.o-acordo]
+id = "123456789012345678"
+name = "O Acordo"
+enabled = true
+
+[guilds.outra-comunidade]
+id = "987654321098765432"
+name = "Outra Comunidade"
+enabled = false

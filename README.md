@@ -4,7 +4,13 @@ Bot privado para administrar 2–3 servidores próprios, com código-fonte públ
 Monólito modular em Rust, desenvolvido no Windows e preparado para VPS Linux.
 O objetivo é evoluir administração, automações e integrações incrementalmente.
 
-## V1.0
+## V1.1
+
+Anúncios por formulário, regras em embeds, catálogo de links e prévias privadas.
+Consulte o [guia V1.1](docs/v1.1.md) para migração, comandos completos, templates,
+persistência JSON, recuperação e homologação.
+O registro central, defaults compartilhados e comandos independentes estão no
+[guia multiguild](docs/multiguild.md). TOMLs são carregados somente na inicialização.
 
 | Comando | Função | Permissão do usuário |
 |---|---|---|
@@ -13,6 +19,9 @@ O objetivo é evoluir administração, automações e integrações incrementalm
 | `/announce channel content` | Publica texto no canal configurado | Gerenciar mensagens |
 | `/role add member role` | Adiciona cargo | Gerenciar cargos |
 | `/role remove member role` | Remove cargo | Gerenciar cargos |
+| `/announcements create/edit/list/delete` | Gerencia anúncios com prévia | Gerenciar mensagens |
+| `/rules preview/publish/update/edit/add/remove/list` | Gerencia regras | Gerenciar mensagens |
+| `/links preview/publish/update/edit/add/remove/list` | Gerencia links | Gerenciar mensagens |
 
 Comandos administrativos exigem também cargo moderador configurado, quando a lista
 não estiver vazia. O dono do servidor dispensa essas restrições pessoais.
@@ -31,6 +40,8 @@ src/main.rs          ambiente, configuração e logs
 src/config/          tipos, carregamento e validação TOML
 src/core/            cliente, comandos básicos e autorização
 src/modules/         anúncios e cargos
+src/services/        conteúdo, prévias, publicação e armazenamento JSON
+config/guilds/defaults/ padrões compartilhados de configuração e conteúdo
 config/              padrões globais e exemplos por servidor
 tests/               testes de configuração sem Discord
 docs/                arquitetura e roadmap
@@ -53,14 +64,20 @@ No PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
-Copy-Item config/guilds/example.toml.example config/guilds/servidor.toml
+# Instalação nova: não sobrescreva um default.toml privado existente.
+Copy-Item config/default.toml.example config/default.toml
+New-Item -ItemType Directory -Force 'config/guilds/O Acordo'
+Copy-Item config/guilds/config.toml.example 'config/guilds/O Acordo/config.toml'
 ```
 
 No Linux:
 
 ```sh
 cp .env.example .env
-cp config/guilds/example.toml.example config/guilds/servidor.toml
+# Instalação nova; preserve arquivos privados existentes.
+cp config/default.toml.example config/default.toml
+mkdir -p 'config/guilds/O Acordo'
+cp config/guilds/config.toml.example 'config/guilds/O Acordo/config.toml'
 chmod 600 .env
 ```
 
@@ -73,9 +90,11 @@ chmod 600 .env
    apenas `GUILDS`; não necessita Message Content, Presence ou Server Members.
 4. Configure instalação no servidor com scopes `bot` e `applications.commands`.
    Convide a aplicação apenas para seus servidores usando uma conta autorizada.
-5. Conceda ao bot **Ver canais**, **Enviar mensagens**, **Gerenciar mensagens** e
-   **Gerenciar cargos**. Não conceda Administrador. Gerenciar mensagens é exigido
-   pela política administrativa dos anúncios, mesmo que enviar texto não o exija.
+5. Conceda ao bot **Ver canais** e **Enviar mensagens** para anúncios, e
+   **Gerenciar cargos** para operações de cargos. Não conceda Administrador.
+   O autor continua precisando da autorização administrativa, mas não precisa
+   poder escrever diretamente no canal de destino. O bot não precisa de
+   **Gerenciar mensagens** para enviar anúncios.
 6. Posicione o cargo do bot acima dos cargos e membros que ele deverá gerenciar.
    Configure sobrescritas de canal permitindo visualizar e enviar anúncios.
 
@@ -85,36 +104,44 @@ inicial; não há registro global. Reinicie após mudanças na configuração. R
 um servidor do TOML bloqueia suas interações mesmo se comandos antigos ainda
 aparecerem no cliente; remova a aplicação desse servidor para concluir a retirada.
 
-## Configuração
+## Configuracao
 
-`config/default.toml` contém `app_name`, `log_level` e os padrões `[modules]`.
-Use níveis `trace`, `debug`, `info`, `warn`, `error` ou `off`.
-Cada arquivo ativo `config/guilds/*.toml` representa um servidor autorizado.
-O exemplo completo está em `config/guilds/example.toml.example`.
+`config/default.toml` concentra configuracoes globais e `[guilds.alias]` com `id`,
+`name` e `enabled`. `name` determina diretamente a pasta `config/guilds/<name>`.
+Nao repita identidade nos arquivos locais. Nomes com espacos e Unicode sao aceitos;
+nomes reservados, caminhos e colisoes equivalentes sao rejeitados.
 
-- `guild_id`: ID obrigatório, preferencialmente escrito como string decimal.
-- `[modules]`: bloco opcional com administration, messaging e roles; se ausente,
-  herda todo o bloco global. Se presente, informe os três valores booleanos.
-- `[channels].announcements`: único canal permitido para anúncios; obrigatório
-  quando messaging estiver ativo. Aceita canal de texto ou de anúncios.
-- `[channels].moderation_logs`: reservado para evolução; ainda não recebe logs.
-- `[roles].moderators`: lista adicional de cargos autorizados; vazia significa
-  verificar somente a permissão Discord. Não concede permissões por si só.
-- `[messaging].enabled`: permite desabilitar mensagens especificamente.
+Os arquivos locais padronizados sao `config.toml`, `commands.toml`, `rules.toml`,
+`announcements.toml` e `links.toml`. Eles herdam os arquivos de mesmo nome em
+`config/guilds/defaults/`. Propriedades/mapas mesclam individualmente; listas sao
+substituidas, e listas vazias limpam o conteudo. Arquivos locais podem faltar.
 
-IDs inválidos, campos desconhecidos, servidores duplicados, erros TOML e ausência
-de servidores ativos interrompem o início com uma mensagem contextual. Exemplos
-`.example` são ignorados. Configurações ficam em memória e não têm hot reload.
+`commands.toml` habilita cada comando ou subcomando. Modulos desabilitados bloqueiam
+seus comandos; o registro slash omite comandos desligados e grupos vazios.
+Reinicie apos alterar TOMLs. Personalizacoes JSON feitas no Discord continuam
+prioritarias. O estado permanece em `data/guilds/<Guild ID>/state.json`.
 
-| Variável | Uso |
+Para migrar uma instalacao V1.1, pare o bot e execute:
+
+```sh
+cargo run --bin migrate-config -- config templates
+cargo run --bin migrate-config -- --check config
+```
+
+Fontes e backup sao preservados. Veja [o guia completo](docs/multiguild.md).
+
+| Variavel | Uso |
 |---|---|
-| `DISCORD_TOKEN` | Obrigatória; token privado do bot |
-| `CONFIG_DIR` | Diretório de configuração, padrão `config` |
-| `RUST_LOG` | Sobrescreve nível global; aceita filtros do tracing |
+| `DISCORD_TOKEN` | Token privado obrigatorio |
+| `CONFIG_DIR` | Configuracoes, padrao `config` |
+| `DATA_DIR` | Estado JSON, padrao `data` |
+| `RUST_LOG` | Sobrescreve o logging global |
+| `TEMPLATE_DIR` | Somente compatibilidade com templates legados |
 
-Nunca versione `.env`, tokens ou arquivos reais dos servidores. O `.gitignore`
-ignora esses arquivos e bancos locais; o contexto Docker inclui somente fontes e
-manifestos Cargo. Nunca cole o token em comandos que ficam no histórico.
+Nunca publique `.env`, dados JSON ou configuracoes reais. Pastas locais sao
+ignoradas, mas **`config/default.toml` ja e rastreado pelo Git**: revise o staging
+e nao inclua o registro privado em commits. Use `default.toml.example` como exemplo
+publico. O build Docker inclui somente fontes e manifestos Cargo.
 
 ## Executar
 
@@ -136,6 +163,9 @@ docker compose down
 Use `--quiet` ao validar Compose para não imprimir o token interpolado. Não há
 portas expostas. Configuração é montada somente leitura; logs vão para stdout.
 O contêiner recebe SIGTERM e encerra conexões. A imagem final não contém toolchain.
+Conteúdos TOML ficam em `config`, montado somente para leitura. O volume `bot-data` mantém
+as publicações entre reinicializações, com escrita pelo UID 10001. Não remova esse
+volume ao atualizar; faça backup com o bot parado.
 
 ## Qualidade e homologação
 

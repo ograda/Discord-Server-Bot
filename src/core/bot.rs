@@ -1,53 +1,106 @@
 use super::{Data, Error, commands, permissions};
-use crate::{config::Config, modules};
+use crate::config::Config;
 use poise::serenity_prelude as s;
 use std::time::Instant;
 
 pub async fn run(token: String, config: Config) -> Result<(), Error> {
+    let store = crate::services::storage::Store::open(
+        std::env::var("DATA_DIR")
+            .unwrap_or_else(|_| "data".into())
+            .into(),
+    )?;
+    let templates: std::path::PathBuf = std::env::var("TEMPLATE_DIR")
+        .unwrap_or_else(|_| "templates".into())
+        .into();
+    for guild in config.guilds.values() {
+        let state = store.read(guild.guild_id)?;
+        for kind in ["announcements", "rules", "links"] {
+            crate::services::storage::template(&templates, guild, kind, &state)?;
+        }
+    }
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![commands::ping(), commands::status(), modules::messaging::announce(), modules::roles::role()],
+            commands: commands::all(),
             skip_checks_for_owners: false,
             allowed_mentions: Some(s::CreateAllowedMentions::new()),
-            command_check: Some(|ctx| Box::pin(async move { permissions::guild_config(ctx)?; Ok(true) })),
-            on_error: |error| Box::pin(async move {
-                // Não registra argumentos, conteúdo de mensagens ou respostas brutas da API.
-                match error {
-                    poise::FrameworkError::Command { error, ctx, .. } => {
-                        tracing::warn!(command = ctx.command().name, "Falha ao executar comando");
-                        let message = if error.downcast_ref::<s::Error>().is_some() {
-                            "Falha na API Discord. Verifique permissões e tente novamente.".to_owned()
-                        } else { error.to_string() };
-                        let _ = ctx.send(poise::CreateReply::default().content(message).ephemeral(true)).await;
+            command_check: Some(|ctx| {
+                Box::pin(async move {
+                    let guild = permissions::guild_config(ctx)?;
+                    let path = ctx.command().qualified_name.replace(' ', ".");
+                    if !guild.command_enabled(&path, ctx.data().config.global.modules) {
+                        ctx.send(poise::CreateReply::default().content("Comando desabilitado nesta guilda.").ephemeral(true)).await?;
+                        return Ok(false);
                     }
-                    poise::FrameworkError::CommandCheckFailed { ctx, .. } => {
-                        let _ = ctx.send(poise::CreateReply::default().content("Servidor não autorizado.").ephemeral(true)).await;
-                    }
-                    other => {
-                        tracing::warn!(kind = ?std::mem::discriminant(&other), "Erro do framework");
-                        if let Some(ctx) = other.ctx() {
-                            let _ = ctx.send(poise::CreateReply::default().content("Não foi possível executar o comando. Verifique parâmetros e permissões.").ephemeral(true)).await;
+                    Ok(true)
+                })
+            }),
+            on_error: |error| {
+                Box::pin(async move {
+                    match error {
+                        poise::FrameworkError::Setup { error, .. } => {
+                            tracing::error!(
+                                error = ?error,
+                                "Falha na inicialização do framework"
+                            );
+                        }
+
+                        poise::FrameworkError::Command { ctx, error, .. } => {
+                            tracing::warn!(command = ctx.command().name, "Falha em comando administrativo");
+                            let message = if error.downcast_ref::<s::Error>().is_some() {
+                                "Falha na API Discord. Verifique as permissões. Se houve envio com resultado incerto, consulte o registro pending antes de repetir.".to_string()
+                            } else if error.downcast_ref::<std::io::Error>().is_some() || error.downcast_ref::<serde_json::Error>().is_some() {
+                                "Falha no armazenamento. Verifique o volume de dados e restaure um backup se necessário; não repita publicações antes de conferir o estado.".to_string()
+                            } else { error.to_string() };
+                            let _ = ctx.send(poise::CreateReply::default().content(message).ephemeral(true)).await;
+                        }
+
+                        other => {
+                            if let Err(error) = poise::builtins::on_error(other).await {
+                                tracing::error!(
+                                    error = ?error,
+                                    "Falha no tratamento de erro do Poise"
+                                );
+                            }
                         }
                     }
-                }
-            }),
-            event_handler: |_, event, _, _| Box::pin(async move {
-                match event {
-                    s::FullEvent::Ready { data_about_bot } => tracing::info!(bot = %data_about_bot.user.id, "Conectado ao Discord"),
-                    s::FullEvent::Resume { .. } => tracing::info!("Sessão Discord retomada"),
-                    _ => {}
-                }
-                Ok(())
-            }),
+                })
+            },
+            event_handler: |_, event, _, _| {
+                Box::pin(async move {
+                    match event {
+                        s::FullEvent::Ready { data_about_bot } => {
+                            tracing::info!(bot = %data_about_bot.user.id, "Conectado ao Discord")
+                        }
+                        s::FullEvent::Resume { .. } => tracing::info!("Sessão Discord retomada"),
+                        _ => {}
+                    }
+                    Ok(())
+                })
+            },
             ..Default::default()
         })
-        .setup(move |ctx, _, framework| Box::pin(async move {
-            for id in config.guilds.keys() {
-                poise::builtins::register_in_guild(ctx, &framework.options().commands, *id).await?;
-                tracing::info!(guild = %id, "Comandos registrados");
-            }
-            Ok(Data { config, started: Instant::now() })
-        })).build();
+        .setup(move |ctx, _, _framework| {
+            Box::pin(async move {
+                for (id, guild) in &config.guilds {
+                    let commands = crate::config::availability::registered(guild, config.global.modules);
+                    if let Err(error) = poise::builtins::register_in_guild(ctx, &commands, *id).await {
+                        if guild.enabled { return Err(error.into()); }
+                        // A disabled guild may no longer have the bot installed.
+                        // Runtime checks still reject all its interactions.
+                        tracing::warn!(guild = %id, "Não foi possível limpar comandos da guilda desabilitada");
+                        continue;
+                    }
+                    tracing::info!(guild = %id, "Comandos registrados");
+                }
+                Ok(Data {
+                    store,
+                    templates,
+                    config,
+                    started: Instant::now(),
+                })
+            })
+        })
+        .build();
     let mut client = s::ClientBuilder::new(token, s::GatewayIntents::GUILDS)
         .framework(framework)
         .await?;

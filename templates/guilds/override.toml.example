@@ -1,0 +1,6 @@
+# Copie para templates/guilds/SEU_GUILD_ID/rules/default.toml.
+# Informe somente os campos que deseja substituir no template global.
+title = "📜 Regras da nossa comunidade"
+description = "Bem-vindo à comunidade! Leia as orientações abaixo."
+# thumbnail = "https://seu-dominio.example/imagem.png"
+# entries, quando informado, substitui a coleção inteira.

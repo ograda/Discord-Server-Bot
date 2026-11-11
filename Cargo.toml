@@ -1,15 +1,20 @@
 [package]
 name = "discord-server-bot"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.98"
 publish = false
+default-run = "discord-server-bot"
 
 [dependencies]
 anyhow = "1"
 dotenvy = "0.15"
 poise = "0.6.2"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+tempfile = "3"
+icu_normalizer = { version = "2.4", default-features = false, features = ["compiled_data"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 toml = "0.8"
 tracing = "0.1"

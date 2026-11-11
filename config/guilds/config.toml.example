@@ -1,0 +1,16 @@
+# Copie para config/guilds/<name>/config.toml. Identidade fica em default.toml.
+[modules]
+messaging = true
+rules = true
+links = true
+
+[channels]
+announcements = "111111111111111111"
+rules = "222222222222222222"
+links = "333333333333333333"
+
+[channels.custom]
+events = "444444444444444444"
+
+[roles]
+moderators = []

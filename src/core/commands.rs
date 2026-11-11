@@ -1,5 +1,18 @@
 use super::{Context, Error};
 
+pub fn all() -> Vec<poise::Command<super::Data, Error>> {
+    use crate::modules;
+    vec![
+        ping(),
+        status(),
+        modules::messaging::announce(),
+        modules::roles::role(),
+        modules::content_commands::announcements(),
+        modules::content_commands::rules(),
+        modules::content_commands::links(),
+    ]
+}
+
 /// Verifica se o bot está online.
 #[poise::command(slash_command, guild_only, ephemeral)]
 pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {

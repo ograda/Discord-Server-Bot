@@ -336,17 +336,20 @@ dependencies = [
 
 [[package]]
 name = "discord-server-bot"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "dotenvy",
+ "icu_normalizer",
  "poise",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

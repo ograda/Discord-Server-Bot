@@ -1,0 +1,12 @@
+[modules]
+administration = true
+messaging = false
+roles = true
+rules = false
+links = false
+
+[roles]
+moderators = []
+
+[messaging]
+enabled = true

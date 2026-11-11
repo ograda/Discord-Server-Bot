@@ -1,0 +1,4 @@
+# Copie para config/guilds/<name>/commands.toml.
+[commands]
+"rules.publish" = false
+"announcements.delete" = false

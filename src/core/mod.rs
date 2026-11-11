@@ -7,6 +7,8 @@ use std::time::Instant;
 pub type Error = anyhow::Error;
 pub type Context<'a> = poise::Context<'a, Data, Error>;
 pub struct Data {
+    pub store: crate::services::storage::Store,
+    pub templates: std::path::PathBuf,
     pub config: Config,
     pub started: Instant,
 }

@@ -2,7 +2,7 @@ use discord_server_bot::config::{self, GlobalConfig, GuildConfig};
 use poise::serenity_prelude::GuildId;
 use std::fs;
 
-const GLOBAL: &str = include_str!("../config/default.toml");
+const GLOBAL: &str = include_str!("fixtures/global.toml");
 const GUILD: &str = include_str!("../config/guilds/example.toml.example");
 
 fn fixture() -> tempfile::TempDir {
@@ -55,17 +55,12 @@ fn rejects_empty_allowlist() {
 }
 #[test]
 fn validates_global_fields() {
-    for text in [
-        GLOBAL.replace("Discord Server Bot", " "),
-        GLOBAL.replace("info", "invalid"),
-    ] {
-        assert!(
-            toml::from_str::<GlobalConfig>(&text)
-                .unwrap()
-                .validate()
-                .is_err()
-        );
-    }
+    let mut config: GlobalConfig = toml::from_str(GLOBAL).unwrap();
+    config.app_name = String::new();
+    assert!(config.validate().is_err());
+    config.app_name = "Test".into();
+    config.log_level = "invalid".into();
+    assert!(config.validate().is_err());
     assert!(toml::from_str::<GlobalConfig>("app_name = 'test'").is_err());
 }
 #[test]

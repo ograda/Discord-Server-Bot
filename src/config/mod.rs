@@ -1,4 +1,7 @@
+pub mod availability;
 mod loader;
+pub mod migration;
+pub mod registry;
 pub use loader::load;
 
 use anyhow::{Result, ensure};
@@ -12,20 +15,48 @@ pub struct GlobalConfig {
     pub app_name: String,
     pub log_level: String,
     pub modules: Modules,
+    #[serde(default)]
+    pub guilds: Option<HashMap<String, GuildRegistration>>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, serde::Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuildRegistration {
+    pub id: GuildId,
+    pub name: String,
+    #[serde(default = "enabled_default")]
+    pub enabled: bool,
+}
+fn enabled_default() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Modules {
     pub administration: bool,
     pub messaging: bool,
     pub roles: bool,
+    #[serde(default)]
+    pub rules: bool,
+    #[serde(default)]
+    pub links: bool,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GuildConfig {
     pub guild_id: GuildId,
+    pub alias: Option<String>,
+    pub name: Option<String>,
+    #[serde(default = "enabled_default")]
+    pub enabled: bool,
+    #[serde(skip)]
+    pub commands: HashMap<String, bool>,
+    #[serde(skip)]
+    pub contents: HashMap<String, crate::services::content::Document>,
+    #[serde(default)]
+    pub templates: HashMap<String, String>,
     pub modules: Option<Modules>,
     #[serde(default)]
     pub channels: Channels,
@@ -40,6 +71,10 @@ pub struct GuildConfig {
 pub struct Channels {
     pub announcements: Option<ChannelId>,
     pub moderation_logs: Option<ChannelId>,
+    pub rules: Option<ChannelId>,
+    pub links: Option<ChannelId>,
+    #[serde(default)]
+    pub custom: HashMap<String, ChannelId>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -82,6 +117,15 @@ impl GlobalConfig {
 impl GuildConfig {
     pub fn validate(&self, defaults: Modules) -> Result<()> {
         let modules = self.modules.unwrap_or(defaults);
+        self.validate_registry()?;
+        ensure!(
+            !modules.rules || self.channels.rules.is_some(),
+            "rules exige channels.rules"
+        );
+        ensure!(
+            !modules.links || self.channels.links.is_some(),
+            "links exige channels.links"
+        );
         ensure!(
             !(modules.messaging && self.messaging.enabled) || self.channels.announcements.is_some(),
             "messaging exige channels.announcements"

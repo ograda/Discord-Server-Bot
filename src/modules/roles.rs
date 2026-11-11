@@ -42,6 +42,7 @@ async fn change(ctx: Context<'_>, user: s::User, role: s::Role, add: bool) -> Re
         "Cargos desabilitados"
     );
     let auth = permissions::administrative(ctx, s::Permissions::MANAGE_ROLES).await?;
+    permissions::ensure_bot_permissions(&auth, s::Permissions::MANAGE_ROLES)?;
     let role = auth
         .guild
         .roles

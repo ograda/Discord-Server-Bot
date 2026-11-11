@@ -1,8 +1,13 @@
 /target/
+/data/
+/templates/guilds/*/
 .env
 .env.*
 !.env.example
 /config/guilds/*.toml
+/config/guilds/*/
+!/config/guilds/defaults/
+/config/default.toml.pre-multiguild
 /config/local*
 *.db
 *.db-*

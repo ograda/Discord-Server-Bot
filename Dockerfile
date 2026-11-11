@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && groupadd --gid 10001 bot && useradd --uid 10001 --gid bot --no-create-home bot
 WORKDIR /app
 COPY --from=builder /app/target/release/discord-server-bot /usr/local/bin/discord-server-bot
+RUN mkdir -p /app/data && chown 10001:10001 /app/data
 USER 10001:10001
 ENV CONFIG_DIR=/app/config
 STOPSIGNAL SIGTERM
