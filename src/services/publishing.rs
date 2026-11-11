@@ -91,7 +91,7 @@ pub async fn preview(
                     ..Default::default()
                 }
                 .content(if doc.text.is_empty() {
-                    "Prévia privada • expira em 4 minutos"
+                    "Prévia privada • sessão de confirmação: 4 minutos"
                 } else {
                     &doc.text
                 })
@@ -165,8 +165,8 @@ pub async fn preview(
             ctx.say("Operação cancelada.").await?;
             return Ok(());
         }
-        commit(ctx, kind, &key, &doc, revision, delete).await?;
-        ctx.say("Operação concluída e estado salvo.").await?;
+        let result = commit(ctx, kind, &key, &doc, revision, delete).await?;
+        ctx.say(result).await?;
         return Ok(());
     }
 }
@@ -178,7 +178,7 @@ async fn commit(
     doc: &Document,
     revision: u64,
     delete: bool,
-) -> Result<(), Error> {
+) -> Result<String, Error> {
     let embeds = doc.embeds(kind)?;
     let channel = authorize(ctx, kind, !embeds.is_empty()).await?;
     let guild = permissions::guild_config(ctx)?.guild_id;
@@ -193,6 +193,12 @@ async fn commit(
         "Existe operação com resultado incerto. Confira o canal e o state.json antes de repetir; publicação bloqueada para evitar duplicação."
     );
     let existing = state.publications.get(key).cloned();
+    ensure!(
+        kind != "announcements"
+            || existing.is_some()
+            || key == crate::services::announcements::new_id(ctx.id()),
+        "Anúncio já não possui publicação registrada; crie um novo anúncio, não uma edição"
+    );
     if kind == "rules" || kind == "links" {
         let action = if existing.is_some() {
             "update"
@@ -234,10 +240,18 @@ async fn commit(
                 if response.status_code.as_u16() == 404 =>
             {
                 state.publications.remove(key);
+                if kind == "announcements" {
+                    state.documents.remove(key);
+                }
                 state.revision += 1;
                 ctx.data().store.write(guild, &state)?;
+                if kind == "announcements" {
+                    return Ok(format!(
+                        "Mensagem já excluída no Discord. Registro `{key}` reconciliado; nenhuma nova mensagem foi enviada."
+                    ));
+                }
                 anyhow::bail!(
-                    "Mensagem excluída manualmente. Registro recuperado; abra nova prévia para confirmar a republicação."
+                    "Mensagem excluída manualmente. Registro recuperado; use publish e confirme uma nova publicação."
                 );
             }
             Err(error) => return Err(error.into()),
@@ -289,5 +303,14 @@ async fn commit(
     state.revision += 1;
     ctx.data().store.write(guild, &state)?;
     tracing::info!(%guild, %channel, actor = %ctx.author().id, %key, delete, "Publicação gerenciada atualizada");
-    Ok(())
+    Ok(if delete {
+        format!("Anúncio `{key}` excluído e registro removido.")
+    } else {
+        let publication = &state.publications[key];
+        format!(
+            "Operação concluída. Identificador: `{key}`\nMessage ID: `{}`\n[Ver mensagem]({})",
+            publication.message,
+            crate::services::announcements::message_link(guild, publication)
+        )
+    })
 }

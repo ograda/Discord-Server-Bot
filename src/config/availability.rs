@@ -1,5 +1,10 @@
 use super::*;
 pub const COMMANDS: &[&str] = &[
+    "profile.show",
+    "profile.nickname",
+    "profile.avatar",
+    "profile.bio",
+    "profile.apply",
     "ping",
     "status",
     "announce",
@@ -40,10 +45,31 @@ impl GuildConfig {
             }
             "rules" => modules.administration && modules.rules,
             "links" => modules.administration && modules.links,
+            "profile" => modules.administration && modules.profile,
             _ => false,
         };
         active && COMMANDS.contains(&path) && self.commands.get(path).copied().unwrap_or(true)
     }
+}
+
+pub fn omission_reason(guild: &GuildConfig, path: &str, defaults: Modules) -> Option<&'static str> {
+    if !guild.enabled {
+        return Some("guilda desabilitada");
+    }
+    if !COMMANDS.contains(&path) {
+        return Some("comando desconhecido");
+    }
+    if !guild.command_enabled(path, defaults) {
+        if !guild.modules.unwrap_or(defaults).administration && !["ping", "status"].contains(&path)
+        {
+            return Some("administration=false");
+        }
+        if guild.commands.get(path) == Some(&false) {
+            return Some("commands.toml desabilita a entrada");
+        }
+        return Some("módulo ou messaging.enabled desabilitado em config.toml");
+    }
+    None
 }
 pub fn registered(
     guild: &GuildConfig,

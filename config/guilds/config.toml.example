@@ -3,6 +3,7 @@
 messaging = true
 rules = true
 links = true
+profile = true
 
 [channels]
 announcements = "111111111111111111"
@@ -14,3 +15,9 @@ events = "444444444444444444"
 
 [roles]
 moderators = []
+
+[profile]
+nickname = "Bot da Comunidade"
+bio = "Bot oficial desta comunidade."
+# Opcional: arquivo real dentro da pasta desta guilda; não é criado automaticamente.
+# avatar = "assets/avatar.png"

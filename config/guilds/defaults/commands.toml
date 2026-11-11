@@ -1,5 +1,10 @@
 # Entradas ausentes são habilitadas por padrão, respeitando o módulo.
 [commands]
+"profile.show" = true
+"profile.nickname" = true
+"profile.avatar" = true
+"profile.bio" = true
+"profile.apply" = true
 ping = true
 status = true
 announce = true

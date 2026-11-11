@@ -71,3 +71,19 @@ ICU4X, já presente transitivamente, valida colisões de nomes por NFKC/maiúscu
 O migrador valida destinos antes de gravar, preserva fontes, cria backup e substitui
 o registro global por último. O registro central é autoritativo quando presente;
 somente sua ausência ativa o carregador legado. Veja [Multiguild](multiguild.md).
+# Extensão de perfil e diagnóstico V1.1
+
+`services/announcements.rs` resolve chaves internas e Message IDs exclusivamente
+contra publicações conhecidas da guilda. `services/profile.rs` contém validação de
+assets, cálculo das diferenças e um adaptador REST tipado para o endpoint oficial
+de membro atual. `modules/profile.rs` aplica a autorização administrativa existente.
+O adaptador não altera o usuário global; sanitiza erros e respeita respostas 429.
+Campos ausentes no Serenity são tratados apenas nesse adaptador, sem duplicar o
+cliente de eventos. Imagens não aparecem em logs e são validadas antes do envio.
+
+O campo opcional `profile` do estado existente mantém compatibilidade com JSONs
+anteriores, usando o mesmo bloqueio e gravação atômica. Overrides JSON prevalecem
+sobre TOML; assets TOML são carregados na inicialização e confinados à pasta da
+guilda. Nenhuma atualização de perfil é executada automaticamente no startup.
+Veja as limitações de leitura de biografia e a homologação no
+[guia de estabilização](stabilization-profile.md).

@@ -4,6 +4,7 @@ messaging = false
 roles = true
 rules = false
 links = false
+profile = false
 
 [roles]
 moderators = []

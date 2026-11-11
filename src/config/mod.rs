@@ -41,12 +41,16 @@ pub struct Modules {
     pub rules: bool,
     #[serde(default)]
     pub links: bool,
+    #[serde(default)]
+    pub profile: bool,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GuildConfig {
     pub guild_id: GuildId,
+    #[serde(default)]
+    pub profile: crate::services::profile::ProfileConfig,
     pub alias: Option<String>,
     pub name: Option<String>,
     #[serde(default = "enabled_default")]
@@ -116,6 +120,7 @@ impl GlobalConfig {
 }
 impl GuildConfig {
     pub fn validate(&self, defaults: Modules) -> Result<()> {
+        self.profile.validate()?;
         let modules = self.modules.unwrap_or(defaults);
         self.validate_registry()?;
         ensure!(

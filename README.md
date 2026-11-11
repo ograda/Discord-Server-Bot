@@ -6,6 +6,12 @@ O objetivo é evoluir administração, automações e integrações incrementalm
 
 ## V1.1
 
+Consulte também o [guia de estabilização e perfil por guilda](docs/stabilization-profile.md)
+para identificadores de anúncios, diagnóstico de comandos ausentes e homologação.
+O módulo opcional `/profile show/nickname/avatar/bio/apply` altera somente o perfil
+do bot no servidor atual. Exige Gerenciar Servidor para o usuário e, ao alterar
+o apelido, Alterar Apelido para o bot. Personalizações ficam no JSON da guilda.
+
 Anúncios por formulário, regras em embeds, catálogo de links e prévias privadas.
 Consulte o [guia V1.1](docs/v1.1.md) para migração, comandos completos, templates,
 persistência JSON, recuperação e homologação.

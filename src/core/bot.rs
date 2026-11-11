@@ -4,6 +4,7 @@ use poise::serenity_prelude as s;
 use std::time::Instant;
 
 pub async fn run(token: String, config: Config) -> Result<(), Error> {
+    let profile_client = crate::services::profile::Client::new()?;
     let store = crate::services::storage::Store::open(
         std::env::var("DATA_DIR")
             .unwrap_or_else(|_| "data".into())
@@ -82,8 +83,17 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
         .setup(move |ctx, _, _framework| {
             Box::pin(async move {
                 for (id, guild) in &config.guilds {
+                    let modules = guild.modules.unwrap_or(config.global.modules);
+                    let registered: Vec<_> = crate::config::availability::COMMANDS.iter().filter(|name| guild.command_enabled(name, config.global.modules)).copied().collect();
+                    tracing::info!(alias = guild.alias.as_deref().unwrap_or("sem-alias"), guild = %id, ?modules, commands = ?registered, "Preparando comandos por guilda");
+                    for name in crate::config::availability::COMMANDS {
+                        if let Some(reason) = crate::config::availability::omission_reason(guild, name, config.global.modules) {
+                            tracing::info!(alias = guild.alias.as_deref().unwrap_or("sem-alias"), guild = %id, command = name, reason, "Comando omitido");
+                        }
+                    }
                     let commands = crate::config::availability::registered(guild, config.global.modules);
                     if let Err(error) = poise::builtins::register_in_guild(ctx, &commands, *id).await {
+                        tracing::error!(guild = %id, "Falha no registro remoto de comandos");
                         if guild.enabled { return Err(error.into()); }
                         // A disabled guild may no longer have the bot installed.
                         // Runtime checks still reject all its interactions.
@@ -93,6 +103,7 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
                     tracing::info!(guild = %id, "Comandos registrados");
                 }
                 Ok(Data {
+                    profile_client,
                     store,
                     templates,
                     config,

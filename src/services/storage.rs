@@ -16,6 +16,8 @@ pub struct Publication {
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct State {
+    #[serde(default)]
+    pub profile: crate::services::profile::ProfileState,
     pub revision: u64,
     pub documents: HashMap<String, Document>,
     pub publications: HashMap<String, Publication>,

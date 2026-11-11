@@ -7,6 +7,27 @@ fn main() -> anyhow::Result<()> {
             config.guilds.len(),
             config.guilds.values().filter(|g| g.enabled).count()
         );
+        for guild in config.guilds.values() {
+            let enabled: Vec<_> = discord_server_bot::config::availability::COMMANDS
+                .iter()
+                .filter(|name| guild.command_enabled(name, config.global.modules))
+                .copied()
+                .collect();
+            println!(
+                "Alias {:?}: comandos habilitados: {}",
+                guild.alias,
+                enabled.join(", ")
+            );
+            for name in discord_server_bot::config::availability::COMMANDS {
+                if let Some(reason) = discord_server_bot::config::availability::omission_reason(
+                    guild,
+                    name,
+                    config.global.modules,
+                ) {
+                    println!("  omitido {name}: {reason}");
+                }
+            }
+        }
         return Ok(());
     }
     let root = std::env::args().nth(1).unwrap_or_else(|| "config".into());

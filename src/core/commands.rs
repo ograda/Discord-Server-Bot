@@ -10,6 +10,7 @@ pub fn all() -> Vec<poise::Command<super::Data, Error>> {
         modules::content_commands::announcements(),
         modules::content_commands::rules(),
         modules::content_commands::links(),
+        modules::profile::profile(),
     ]
 }
 

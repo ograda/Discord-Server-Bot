@@ -187,3 +187,21 @@ distintas, um subcomando desabilitado só em uma delas e um módulo desabilitado
 Reinicie e confirme o registro slash filtrado. Teste também comandos antigos,
 rascunho com publicação bloqueada, atualização preservando ID e renomeação de pasta
 sem perda de estado. Nenhuma integração Discord real foi executada nesta sessão.
+# Perfil opcional e diagnóstico de comandos
+
+Para habilitar o perfil, configure `[modules] profile = true` no `config.toml`
+da guilda. Em `commands.toml`, as entradas `profile.show`, `profile.nickname`,
+`profile.avatar`, `profile.bio` e `profile.apply` controlam cada subcomando.
+O módulo permanece desabilitado por padrão para preservar as configurações antigas.
+
+`[profile]` aceita `nickname`, `bio` e `avatar`; este último usa um caminho como
+`assets/avatar.png`, relativo à pasta da guilda. Overrides compartilhados seguem
+a mesma mesclagem dos demais campos, mas o asset é sempre resolvido dentro da
+guilda de destino. Personalizações por comando ficam em `data/guilds/<ID>/state.json`.
+Não há alteração do TOML nem propagação de alterações para outras guildas.
+
+Um módulo desabilitado omite seus comandos mesmo quando `commands.toml` os habilita.
+O startup registra os comandos efetivos e motivos de omissão por guilda. Execute
+`cargo run --bin migrate-config -- --check` para diagnosticar a configuração sem
+conectar ao Discord. Reinicie o bot para registrar alterações no Discord.
+Veja [exemplos e checklist](stabilization-profile.md).

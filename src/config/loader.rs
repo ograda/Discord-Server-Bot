@@ -22,6 +22,10 @@ pub fn load(root: &Path) -> Result<Config> {
             continue;
         }
         let mut guild: GuildConfig = parse(&path)?;
+        ensure!(
+            guild.profile.avatar.is_none(),
+            "Avatar local exige configuração multiguild atual; execute a migração antes de habilitar assets de perfil"
+        );
         cache_legacy(&mut guild)?;
         guild
             .validate(global.modules)
@@ -144,6 +148,7 @@ fn load_registered(root: &Path, global: GlobalConfig) -> Result<Config> {
         let mut guild: GuildConfig = config
             .try_into()
             .with_context(|| format!("Configuração inválida: {alias}"))?;
+        guild.profile.load_avatar(&folder)?;
         let mut commands = toml::Value::Table(Default::default());
         for path in [defaults.join("commands.toml"), folder.join("commands.toml")] {
             merge(&mut commands, optional(&path)?);

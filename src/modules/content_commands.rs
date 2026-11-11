@@ -225,7 +225,7 @@ async fn announcement_create(ctx: Context<'_>) -> Result<(), Error> {
         p::preview(
             ctx,
             "announcements",
-            format!("announcement-{}", ctx.id()),
+            crate::services::announcements::new_id(ctx.id()),
             doc,
             revision,
             false,
@@ -235,16 +235,57 @@ async fn announcement_create(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 async fn announcement(ctx: Context<'_>, id: String, delete: bool) -> Result<(), Error> {
-    p::authorize(ctx, "announcements", true).await?;
+    let channel = p::authorize(ctx, "announcements", true).await?;
     let guild = permissions::guild_config(ctx)?.guild_id;
     let state = {
         let _guard = ctx.data().store.gate.lock().await;
         ctx.data().store.read(guild)?
     };
+    let id = crate::services::announcements::resolve(&state, &id)?;
     ensure!(
-        id.starts_with("announcement-"),
-        "Identificador de anúncio inválido"
+        state.pending.is_none(),
+        "Há uma operação pendente de reconciliação nesta guilda; confira o estado antes de gerenciar anúncios."
     );
+    let publication = &state.publications[&id];
+    ensure!(
+        publication.channel == channel,
+        "O canal configurado mudou; reconcilie o registro do anúncio antes de continuar."
+    );
+    let auth = permissions::administrative(ctx, s::Permissions::MANAGE_MESSAGES).await?;
+    let target = channel
+        .to_channel(ctx.http())
+        .await?
+        .guild()
+        .context("Canal indisponível")?;
+    permissions::ensure_bot_channel_permissions(
+        &auth,
+        &target,
+        s::Permissions::READ_MESSAGE_HISTORY,
+    )?;
+    let missing = match channel.message(ctx.http(), publication.message).await {
+        Ok(message) => {
+            ensure!(
+                message.author.id == auth.bot.user.id,
+                "Mensagem registrada não pertence ao bot; operação bloqueada"
+            );
+            false
+        }
+        Err(s::Error::Http(s::HttpError::UnsuccessfulRequest(response)))
+            if response.status_code.as_u16() == 404 =>
+        {
+            true
+        }
+        Err(s::Error::Http(s::HttpError::UnsuccessfulRequest(response)))
+            if response.status_code.as_u16() == 403 =>
+        {
+            anyhow::bail!("O bot perdeu acesso ao canal ou ao histórico da mensagem.")
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if missing {
+        ctx.say("A mensagem original foi excluída. Confirme a exclusão abaixo para reconciliar somente o registro local.").await?;
+    }
+    let delete = delete || missing;
     let doc = state
         .documents
         .get(&id)
@@ -263,7 +304,9 @@ async fn announcement(ctx: Context<'_>, id: String, delete: bool) -> Result<(), 
 #[poise::command(slash_command, guild_only, ephemeral, rename = "edit")]
 async fn announcement_edit(
     ctx: Context<'_>,
-    #[description = "Identificador exibido por list"] id: String,
+    #[description = "Chave interna ou Message ID do anúncio"]
+    #[autocomplete = "announcement_autocomplete"]
+    id: String,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
     announcement(ctx, id, false).await
@@ -272,7 +315,9 @@ async fn announcement_edit(
 #[poise::command(slash_command, guild_only, ephemeral, rename = "delete")]
 async fn announcement_delete(
     ctx: Context<'_>,
-    #[description = "Identificador exibido por list"] id: String,
+    #[description = "Chave interna ou Message ID do anúncio"]
+    #[autocomplete = "announcement_autocomplete"]
+    id: String,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
     announcement(ctx, id, true).await
@@ -291,10 +336,76 @@ async fn announcement_list(ctx: Context<'_>) -> Result<(), Error> {
         .publications
         .iter()
         .filter(|(key, _)| key.starts_with("announcement-"))
-        .map(|(key, value)| format!("{key} — {}", value.message))
+        .map(|(key, value)| {
+            format!(
+                "**{}**\nChave: `{key}`\nMessage ID: `{}` • criado <t:{}:f>\n[Mensagem]({}) • {}",
+                crate::services::announcements::summary(&state, key),
+                value.message,
+                value.message.created_at().unix_timestamp(),
+                crate::services::announcements::message_link(guild, value),
+                if state.pending.is_some() {
+                    "reconciliação pendente"
+                } else {
+                    "registrado (existência conferida ao gerenciar)"
+                }
+            )
+        })
         .collect();
     rows.sort();
-    list_rows(ctx, rows).await
+    if rows.is_empty() {
+        ctx.say("Nenhum anúncio gerenciado nesta guilda.").await?;
+    }
+    for row in rows {
+        ctx.say(row).await?;
+    }
+    Ok(())
+}
+
+async fn announcement_autocomplete(ctx: Context<'_>, partial: &str) -> Vec<s::AutocompleteChoice> {
+    let Ok(cfg) = permissions::guild_config(ctx) else {
+        return vec![];
+    };
+    if permissions::administrative(ctx, s::Permissions::MANAGE_MESSAGES)
+        .await
+        .is_err()
+    {
+        return vec![];
+    }
+    let _guard = ctx.data().store.gate.lock().await;
+    let Ok(state) = ctx.data().store.read(cfg.guild_id) else {
+        return vec![];
+    };
+    let mut keys: Vec<_> = state
+        .publications
+        .keys()
+        .filter(|key| key.starts_with("announcement-"))
+        .collect();
+    keys.sort();
+    keys.into_iter()
+        .filter(|key| {
+            key.contains(partial)
+                || state.publications[*key]
+                    .message
+                    .to_string()
+                    .contains(partial)
+                || crate::services::announcements::summary(&state, key)
+                    .to_lowercase()
+                    .contains(&partial.to_lowercase())
+        })
+        .take(25)
+        .map(|key| {
+            s::AutocompleteChoice::new(
+                format!(
+                    "{} — {key}",
+                    crate::services::announcements::summary(&state, key)
+                )
+                .chars()
+                .take(100)
+                .collect::<String>(),
+                key.clone(),
+            )
+        })
+        .collect()
 }
 async fn list_rows(ctx: Context<'_>, rows: Vec<String>) -> Result<(), Error> {
     if rows.is_empty() {
