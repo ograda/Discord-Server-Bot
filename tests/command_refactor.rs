@@ -838,10 +838,21 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
         if kind == "rules" {
             for request in [&records[0], &records[2]] {
                 assert_eq!(request.1["embeds"].as_array().unwrap().len(), 1);
-                assert_eq!(
-                    request.1["embeds"][0]["fields"].as_array().unwrap().len(),
-                    10
+                let embed = &request.1["embeds"][0];
+                assert!(
+                    embed
+                        .get("fields")
+                        .is_none_or(|v| v.as_array().unwrap().is_empty())
                 );
+                assert!(embed.get("footer").is_none());
+                for entry in &plan.document.entries {
+                    assert!(
+                        embed["description"]
+                            .as_str()
+                            .unwrap()
+                            .contains(&entry.description)
+                    );
+                }
             }
         }
         assert!(!store.read(gid).unwrap().publications.contains_key(key));

@@ -136,8 +136,14 @@ fn rules_have_one_purple_embed_with_all_ten_rules() {
     assert_eq!(json.as_array().unwrap().len(), 1);
     for embed in json.as_array().unwrap() {
         assert_eq!(embed["color"], 0x5865f2);
-        assert_eq!(embed["fields"].as_array().unwrap().len(), 10);
+        assert!(
+            embed
+                .get("fields")
+                .is_none_or(|v| v.as_array().unwrap().is_empty())
+        );
+        assert!(embed.get("footer").is_none());
     }
+    assert_eq!(json[0]["title"], doc.title);
     assert!(
         json[0]["description"]
             .as_str()
@@ -145,11 +151,25 @@ fn rules_have_one_purple_embed_with_all_ten_rules() {
             .contains("Bem-vindo")
     );
     assert!(
-        json[0]["footer"]["text"]
+        json[0]["description"]
             .as_str()
             .unwrap()
             .contains("moderação")
     );
+    for entry in &doc.entries {
+        assert!(
+            json[0]["description"]
+                .as_str()
+                .unwrap()
+                .contains(&entry.title)
+        );
+        assert!(
+            json[0]["description"]
+                .as_str()
+                .unwrap()
+                .contains(&entry.description)
+        );
+    }
 }
 #[test]
 fn embed_limits_and_variable_rule_count() {
@@ -172,7 +192,7 @@ fn embed_limits_and_variable_rule_count() {
     };
     assert_eq!(doc.embeds("rules").unwrap().len(), 1);
     doc.entries[0].description = "x".repeat(1025);
-    assert!(doc.embeds("rules").is_err());
+    assert!(doc.embeds("rules").is_ok()); // No per-field limit: Rules now uses description.
     doc.entries[0].description = "x".repeat(1000);
     for e in &mut doc.entries {
         e.description = "x".repeat(1000);
@@ -200,25 +220,122 @@ fn rules_single_embed_limit_does_not_change_links_pagination() {
     };
     let rules = serde_json::to_value(doc.embeds("rules").unwrap()).unwrap();
     assert_eq!(rules.as_array().unwrap().len(), 1);
-    assert_eq!(rules[0]["fields"].as_array().unwrap().len(), 25);
     assert!(
-        rules[0]["fields"][24]["name"]
+        rules[0]["description"]
             .as_str()
             .unwrap()
-            .starts_with("25.")
+            .contains("**25. Item 24**\nDescrição")
     );
     assert_eq!(doc.embeds("links").unwrap().len(), 5);
     doc.entries.push(Entry {
         id: "entry-25".into(),
+        title: "Item 25".into(),
+        order: 25,
         ..doc.entries[0].clone()
     });
+    let rules = serde_json::to_value(doc.embeds("rules").unwrap()).unwrap();
+    assert_eq!(rules.as_array().unwrap().len(), 1);
+    assert!(
+        rules[0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("**26. Item 25**\nDescrição")
+    );
+    assert_eq!(doc.embeds("links").unwrap().len(), 6);
+}
+#[test]
+fn rules_description_controls_spacing_preserves_internal_breaks_and_sorted_content() {
+    let doc = Document {
+        title: "📜 Regras".into(),
+        color: 0x5865f2,
+        description: "\nIntrodução linha 1\n\nIntrodução linha 2\n".into(),
+        footer: "\nEncerramento linha 1\nEncerramento linha 2\n".into(),
+        entries: vec![
+            Entry {
+                id: "second".into(),
+                title: "Segunda".into(),
+                description: "\nTexto 2\r\nLinha seguinte\n".into(),
+                order: 2,
+                ..Default::default()
+            },
+            Entry {
+                id: "first".into(),
+                title: "Primeira".into(),
+                emoji: "🛡️".into(),
+                description: "\nTexto 1\n\nDetalhe interno\n".into(),
+                order: 1,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let original = doc.clone();
+    let rendered = serde_json::to_value(doc.embeds("rules").unwrap()).unwrap();
+    assert_eq!(rendered.as_array().unwrap().len(), 1);
+    assert_eq!(rendered[0]["title"], doc.title);
+    assert_eq!(rendered[0]["color"], 0x5865f2);
+    assert_eq!(
+        rendered[0]["description"],
+        "Introdução linha 1\n\nIntrodução linha 2\n\n**1️⃣ 🛡️ Primeira**\nTexto 1\n\nDetalhe interno\n\n**2️⃣ Segunda**\nTexto 2\r\nLinha seguinte\n\nEncerramento linha 1\nEncerramento linha 2"
+    );
+    assert!(rendered[0].get("footer").is_none());
+    assert!(
+        rendered[0]
+            .get("fields")
+            .is_none_or(|v| v.as_array().unwrap().is_empty())
+    );
+    assert_eq!(doc, original); // Rendering must not mutate TOML-derived content.
+}
+
+#[test]
+fn rules_validate_complete_description_without_native_footer_limit_or_truncation() {
+    let mut doc = Document {
+        title: "Regras".into(),
+        description: "a".repeat(4096),
+        ..Default::default()
+    };
+    let rendered = serde_json::to_value(doc.embeds("rules").unwrap()).unwrap();
+    assert_eq!(rendered[0]["description"].as_str().unwrap().len(), 4096);
+    assert!(
+        doc.title.encode_utf16().count()
+            + rendered[0]["description"]
+                .as_str()
+                .unwrap()
+                .encode_utf16()
+                .count()
+            <= 6000
+    );
+    doc.footer = "Fim".into();
     assert!(
         doc.embeds("rules")
             .unwrap_err()
             .to_string()
-            .contains("25 campos")
+            .contains("4096")
     );
-    assert_eq!(doc.embeds("links").unwrap().len(), 6);
+    assert_eq!(doc.description.len(), 4096);
+    doc.description.clear();
+    doc.footer = "a".repeat(2049);
+    assert!(doc.embeds("rules").is_ok());
+    assert!(doc.embeds("links").is_err()); // Other modules retain native footer validation.
+    doc.footer.clear();
+    doc.description = "😀".repeat(2048);
+    assert!(doc.embeds("rules").is_ok());
+    doc.description.push('a');
+    assert!(doc.embeds("rules").is_err());
+    doc.description.clear();
+    doc.entries = vec![Entry {
+        id: "rule".into(),
+        title: "Título".into(),
+        description: "a".repeat(4080),
+        ..Default::default()
+    }];
+    doc.footer = "Encerramento".into();
+    assert!(
+        doc.embeds("rules")
+            .unwrap_err()
+            .to_string()
+            .contains("4096")
+    );
 }
 #[test]
 fn validates_links_and_suppresses_mentions() {

@@ -51,7 +51,9 @@ impl Document {
         limit(&self.text, 2000)?;
         limit(&self.title, 256)?;
         limit(&self.description, 4096)?;
-        limit(&self.footer, 2048)?;
+        if kind != "rules" {
+            limit(&self.footer, 2048)?;
+        }
         ensure!(self.color <= 0xffffff, "Cor inválida");
         for url in [&self.thumbnail, &self.image] {
             if !url.is_empty() {
@@ -78,15 +80,10 @@ impl Document {
                 valid_url(&entry.url)?;
             }
         }
-        let fields_per_embed = if kind == "rules" {
-            ensure!(
-                entries.len() <= 25,
-                "Regras excedem 25 campos; reduza a quantidade para publicar em um único embed"
-            );
-            25
-        } else {
-            5
-        };
+        if kind == "rules" {
+            return self.rules_embed(&entries);
+        }
+        let fields_per_embed = 5;
         let count = entries.len().div_ceil(fields_per_embed).max(1);
         ensure!(count <= 10, "Máximo de 50 seções / 10 embeds");
         if self.title.is_empty() && self.description.is_empty() && entries.is_empty() {
@@ -149,5 +146,55 @@ impl Document {
             "Embeds excedem 6000 caracteres; reduza o conteúdo antes de publicar"
         );
         Ok(embeds)
+    }
+
+    fn rules_embed(&self, entries: &[Entry]) -> Result<Vec<s::CreateEmbed>> {
+        // Normalize only section boundaries; preserve internal TOML line breaks verbatim.
+        let boundary = |c| c == '\n' || c == '\r';
+        let mut sections = Vec::new();
+        let introduction = self.description.trim_matches(boundary);
+        if !introduction.is_empty() {
+            sections.push(introduction.to_owned());
+        }
+        for (index, entry) in entries.iter().enumerate() {
+            let body = entry.description.trim_matches(boundary);
+            ensure!(!body.trim().is_empty(), "Descrição obrigatória");
+            let number = index + 1;
+            let prefix = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+                .get(index)
+                .map_or_else(|| format!("{number}."), |value| value.to_string());
+            let title = entry.title.trim_matches(boundary);
+            let heading = if entry.emoji.is_empty() {
+                format!("{prefix} {title}")
+            } else {
+                format!("{prefix} {} {title}", entry.emoji)
+            };
+            sections.push(format!("**{heading}**\n{body}"));
+        }
+        let ending = self.footer.trim_matches(boundary);
+        if !ending.is_empty() {
+            sections.push(ending.to_owned());
+        }
+        let description = sections.join("\n\n");
+        limit(&description, 4096)?;
+        ensure!(
+            self.title.encode_utf16().count() + description.encode_utf16().count() <= 6000,
+            "Embed de regras excede 6000 caracteres; reduza o conteúdo antes de publicar"
+        );
+        ensure!(
+            !self.title.is_empty() || !description.is_empty(),
+            "Embed de regras vazio"
+        );
+        let mut embed = s::CreateEmbed::new()
+            .color(self.color)
+            .title(&self.title)
+            .description(description);
+        if !self.thumbnail.is_empty() {
+            embed = embed.thumbnail(&self.thumbnail);
+        }
+        if !self.image.is_empty() {
+            embed = embed.image(&self.image);
+        }
+        Ok(vec![embed])
     }
 }
