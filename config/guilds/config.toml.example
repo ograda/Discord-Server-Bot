@@ -22,3 +22,7 @@ nickname = "Bot da Comunidade"
 bio = "Bot oficial desta comunidade."
 # Opcional: arquivo real dentro da pasta desta guilda; não é criado automaticamente.
 # avatar = "assets/avatar.png"
+
+# Opcional por guilda. Habilite apenas após preparar a Activity e verificar elegibilidade.
+[activities.invite]
+enabled = false

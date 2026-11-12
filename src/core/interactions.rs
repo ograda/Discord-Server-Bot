@@ -19,13 +19,16 @@ pub enum Stage {
     Progress,
     Result,
     ErrorNotice,
+    ActivityLaunch,
 }
 impl Stage {
     pub fn route(self) -> &'static str {
         match self {
-            Self::SlashDefer | Self::ConfirmationAck | Self::ModalOpen | Self::ModalSubmitAck => {
-                "POST /interactions/{id}/{token}/callback"
-            }
+            Self::SlashDefer
+            | Self::ConfirmationAck
+            | Self::ModalOpen
+            | Self::ModalSubmitAck
+            | Self::ActivityLaunch => "POST /interactions/{id}/{token}/callback",
             Self::ConfirmationMessage => {
                 "GET /webhooks/{application_id}/{token}/messages/{message_id}"
             }

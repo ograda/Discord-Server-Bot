@@ -1558,7 +1558,9 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
             records[0].1["allowed_mentions"]["parse"],
             serde_json::json!([])
         );
-        assert_eq!(records[2].1["embeds"][0]["title"], "Updated");
+        if kind != "links" {
+            assert_eq!(records[2].1["embeds"][0]["title"], "Updated");
+        }
         if kind == "announcements" {
             assert_eq!(
                 records[0].1["embeds"][0]["footer"]["text"],
@@ -1577,24 +1579,24 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
             assert!(records[2].1["embeds"][0].get("thumbnail").is_none());
         }
         if kind == "links" {
+            use discord_server_bot::services::components_v2::IS_COMPONENTS_V2;
+            assert_eq!(records[0].1["flags"], IS_COMPONENTS_V2);
+            assert!(records[0].1.get("embeds").is_none());
+            assert!(records[0].1.get("content").is_none());
+            assert_eq!(records[2].1["flags"], IS_COMPONENTS_V2);
+            assert_eq!(records[2].1["embeds"], serde_json::json!([]));
+            assert!(records[2].1["content"].is_null());
+            let children = records[2].1["components"][0]["components"]
+                .as_array()
+                .unwrap();
+            assert!(children[0]["content"].as_str().unwrap().contains("Updated"));
+            let row = children.iter().find(|c| c["type"] == 1).unwrap();
+            assert_eq!(row["components"][0]["custom_id"], "links-copy:124");
             assert_eq!(
-                records[0].1["components"][0]["components"][0]["custom_id"],
-                "links-copy:123"
-            );
-            assert_eq!(
-                records[2].1["components"][0]["components"][0]["custom_id"],
-                "links-copy:124"
-            );
-            assert_eq!(
-                records[2].1["components"][0]["components"][1]["custom_id"],
+                row["components"][1]["custom_id"],
                 discord_server_bot::services::links::INVITE_FRIENDS_ID
             );
-            assert!(
-                records[2].1["components"][0]["components"][1]
-                    .get("url")
-                    .is_none()
-            );
-            assert_eq!(records[2].1["embeds"].as_array().unwrap().len(), 1);
+            assert!(row["components"][1].get("url").is_none());
             assert!(!store.read(gid).unwrap().link_invites.contains_key(key));
         }
         if kind == "rules" {
@@ -1697,7 +1699,8 @@ async fn links_publish_recreates_confirmed_missing_message_and_archives_previous
             .contains("GET /api/v10/channels/11/messages/100")
     );
     assert!(records[1].0.contains("POST /api/v10/channels/11/messages"));
-    assert_eq!(records[1].1["embeds"].as_array().unwrap().len(), 1);
+    assert!(records[1].1.get("embeds").is_none());
+    assert_eq!(records[1].1["components"][0]["type"], 17);
     assert_eq!(fs::read(&toml_path).unwrap(), original_toml);
     assert!(
         store
@@ -1818,5 +1821,163 @@ async fn missing_publication_is_preserved_until_confirmed_remove_and_authorship_
     assert_eq!(
         store.read(gid).unwrap().publications["rules"].message.get(),
         100
+    );
+}
+
+#[test]
+fn invite_activity_is_opt_in_per_guild_and_commands_still_gate_the_feature() {
+    let dir = fixture();
+    write(
+        dir.path(),
+        "guilds/One/config.toml",
+        "[activities.invite]\nenabled=true",
+    );
+    let config = config::load(dir.path()).unwrap();
+    assert!(config.guilds[&s::GuildId::new(1)].activities.invite.enabled);
+    assert!(!config.guilds[&s::GuildId::new(2)].activities.invite.enabled);
+    assert!(config.guilds[&s::GuildId::new(1)].command_enabled("links", config.global.modules));
+    write(
+        dir.path(),
+        "guilds/One/commands.toml",
+        "[commands]\nlinks=false",
+    );
+    let config = config::load(dir.path()).unwrap();
+    assert!(!config.guilds[&s::GuildId::new(1)].command_enabled("links", config.global.modules));
+}
+
+#[tokio::test]
+async fn v1_to_v2_migration_is_one_patch_and_failures_never_lose_original_publication() {
+    use discord_server_bot::services::components_v2::IS_COMPONENTS_V2;
+    for fail in [false, true] {
+        let dir = fixture();
+        let config = config::load(dir.path()).unwrap();
+        let catalog = Catalog::new(&config);
+        let store = Store::open(dir.path().join("data")).unwrap();
+        let guild = s::GuildId::new(1);
+        let mut state = State::default();
+        state.publications.insert(
+            "links:important".into(),
+            Publication {
+                channel: s::ChannelId::new(11),
+                message: s::MessageId::new(100),
+            },
+        );
+        state.documents.insert(
+            "unrelated".into(),
+            Document {
+                title: "Preserve me".into(),
+                ..Default::default()
+            },
+        );
+        store.write(guild, &state).unwrap();
+        let plan = Plan {
+            operation: 777,
+            kind: "links",
+            action: "publish".into(),
+            key: "links:important".into(),
+            document: Document {
+                title: "Migrated".into(),
+                ..Default::default()
+            },
+            channel: s::ChannelId::new(11),
+            revision: 0,
+            content_revision: Some(0),
+            delete: false,
+        };
+        let mut migrated: serde_json::Value = serde_json::from_str(&message(9)).unwrap();
+        migrated["flags"] = serde_json::json!(IS_COMPONENTS_V2);
+        let second = if fail {
+            (
+                400,
+                r#"{"code":50035,"message":"Invalid Form Body"}"#.into(),
+            )
+        } else {
+            (200, migrated.to_string())
+        };
+        let (http, server) = mock_discord(vec![(200, message(9)), second]);
+        let result =
+            publishing::execute(&store, &catalog, guild, s::UserId::new(9), &http, &plan).await;
+        assert_eq!(result.is_err(), fail);
+        let after = store.read(guild).unwrap();
+        assert_eq!(after.publications[&plan.key].message.get(), 100);
+        assert_eq!(after.documents["unrelated"].title, "Preserve me");
+        assert!(after.archived_publications.is_empty());
+        assert_eq!(after.pending.is_some(), fail);
+        assert!(
+            store
+                .read(s::GuildId::new(2))
+                .unwrap()
+                .publications
+                .is_empty()
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].0.starts_with("GET "));
+        assert!(
+            requests[1]
+                .0
+                .contains("PATCH /api/v10/channels/11/messages/100")
+        );
+        assert_eq!(requests[1].1["flags"], IS_COMPONENTS_V2);
+        assert!(requests[1].1["content"].is_null());
+        assert_eq!(requests[1].1["embeds"], serde_json::json!([]));
+    }
+}
+
+#[tokio::test]
+async fn activity_launch_uses_one_initial_callback_and_only_definitive_rejections_allow_private_fallback()
+ {
+    use discord_server_bot::{core::interactions::Responses, services::links};
+    for (status, code, count) in [
+        (204, 0, 1),
+        (400, 50035, 2),
+        (404, 10062, 1),
+        (400, 40060, 1),
+    ] {
+        let body = if status == 204 {
+            String::new()
+        } else {
+            serde_json::json!({"code":code,"message":"test"}).to_string()
+        };
+        let mut responses = vec![(status, body)];
+        if count == 2 {
+            responses.push((204, String::new()));
+        }
+        let (http, server) = mock_discord(responses);
+        let tracker = Responses::default();
+        let id = s::InteractionId::new(123);
+        let result = links::respond_activity(&http, &tracker, id, "test-only", true, true).await;
+        assert_eq!(result.is_ok(), status == 204 || count == 2);
+        assert!(
+            links::respond_activity(&http, &tracker, id, "test-only", true, true)
+                .await
+                .is_err()
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), count);
+        assert_eq!(requests[0].1["type"], 12);
+        if count == 2 {
+            assert_eq!(requests[1].1["type"], 4);
+            assert_eq!(requests[1].1["data"]["flags"], 64);
+            assert_eq!(
+                requests[1].1["data"]["content"],
+                links::ACTIVITY_UNAVAILABLE
+            );
+        }
+    }
+    let (http, server) = mock_discord(vec![(204, String::new())]);
+    links::respond_activity(
+        &http,
+        &Responses::default(),
+        s::InteractionId::new(124),
+        "test-only",
+        false,
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        server.join().unwrap()[0].1["data"]["content"],
+        links::ACTIVITY_UNAVAILABLE
     );
 }

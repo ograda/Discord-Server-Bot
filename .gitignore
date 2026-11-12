@@ -1,4 +1,6 @@
 /target/
+**/node_modules/
+/activities/invite/dist/
 /data/
 /templates/guilds/*/
 .env

@@ -107,7 +107,7 @@ impl LinksFile {
             if guild.modules.is_some_and(|m| m.links) {
                 guild.channel(&board.channel)?;
             }
-            board.document().embeds("links")?;
+            super::components_v2::build(&board.document(), "links-validation", vec![])?;
         }
         Ok(())
     }

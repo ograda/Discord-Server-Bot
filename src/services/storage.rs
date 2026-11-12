@@ -264,6 +264,10 @@ pub fn template(
     } else {
         doc
     };
-    doc.embeds(kind)?;
+    if kind == "links" {
+        super::components_v2::build(&doc, "links-validation", vec![])?;
+    } else {
+        doc.embeds(kind)?;
+    }
     Ok(doc)
 }

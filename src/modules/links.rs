@@ -2,6 +2,7 @@ use crate::{
     core::{Context, Error, permissions},
     services::{
         catalog::Board,
+        components_v2,
         content::{Document, Entry},
         links as service,
         publishing::{self, Plan},
@@ -137,7 +138,7 @@ async fn add(
     );
     let mut candidate = board.document();
     candidate.entries.push(entry.clone());
-    candidate.embeds("links")?;
+    components_v2::build(&candidate, "links-preview", vec![])?;
     let mut preview = board.document();
     preview.entries = vec![entry.clone()];
     if show(
@@ -302,9 +303,8 @@ async fn show(
     let edit = format!("links-edit:{}", ctx.id());
     let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
     loop {
-        let mut components = service::invite_components(&doc, &copy)?;
+        let mut buttons = vec![];
         if let Some(label) = accept {
-            let mut buttons = vec![];
             if editable {
                 buttons.push(s::CreateButton::new(&edit).label("Editar"));
             }
@@ -314,37 +314,27 @@ async fn show(
                     .style(s::ButtonStyle::Primary),
             );
             buttons.push(s::CreateButton::new(&cancel).label("Cancelar"));
-            components.insert(0, s::CreateActionRow::Buttons(buttons));
         }
-        let interactive = !components.is_empty();
-        let reply = ctx
-            .send(
-                poise::CreateReply {
-                    embeds: doc.embeds("links")?,
-                    ..Default::default()
-                }
-                .content("Prévia privada do quadro de Links; nada publicado.")
-                .components(components)
-                .ephemeral(true)
-                .allowed_mentions(s::CreateAllowedMentions::new()),
-            )
-            .await?;
+        let interactive = accept.is_some() || doc.discord_invite()?.is_some();
+        let mut payload = components_v2::build(&doc, &copy, buttons)?;
+        if accept == Some("Publicar") {
+            payload = payload.notice("Prévia privada. Publicar cria ou atualiza a mensagem original. Mensagens V1 serão convertidas para Components V2; essa conversão é irreversível nessa mensagem. Cancelar não altera a publicação.")?;
+        }
+        let message = components_v2::preview(ctx, &payload).await?;
         if !interactive {
             return Ok(None);
         }
-        let message = reply.message().await?;
         loop {
-            let interaction = message
-                .await_component_interaction(ctx.serenity_context())
-                .author_id(ctx.author().id)
-                // The persistent Gateway handler responds to this button, including in previews.
-                .filter(|interaction| interaction.data.custom_id != service::INVITE_FRIENDS_ID)
-                .timeout(deadline.saturating_duration_since(tokio::time::Instant::now()))
-                .await;
+            let interaction =
+                s::ComponentInteractionCollector::new(ctx.serenity_context().shard.clone())
+                    .message_id(message.id)
+                    .author_id(ctx.author().id)
+                    // The persistent Gateway handler responds to this button, including in previews.
+                    .filter(|interaction| interaction.data.custom_id != service::INVITE_FRIENDS_ID)
+                    .timeout(deadline.saturating_duration_since(tokio::time::Instant::now()))
+                    .await;
             let Some(interaction) = interaction else {
-                reply
-                    .edit(ctx, poise::CreateReply::default().components(vec![]))
-                    .await?;
+                components_v2::close_preview(ctx, &message, &doc).await?;
                 if accept.is_some() {
                     ctx.say("Sessão expirada; nada salvo ou publicado.").await?;
                 }
@@ -352,12 +342,11 @@ async fn show(
             };
             if interaction.data.custom_id == copy {
                 let invite = doc.discord_invite()?.context("Convite ausente")?;
-                interaction
-                    .create_response(
-                        ctx.http(),
-                        s::CreateInteractionResponse::Message(service::copy_response(&invite.url)?),
-                    )
-                    .await?;
+                components_v2::private_http(interaction.create_response(
+                    ctx.http(),
+                    s::CreateInteractionResponse::Message(service::copy_response(&invite.url)?),
+                ))
+                .await?;
                 continue;
             }
             if interaction.data.custom_id == edit && editable {
@@ -375,9 +364,7 @@ async fn show(
                     Some(deadline.saturating_duration_since(tokio::time::Instant::now())),
                 )
                 .await?;
-                reply
-                    .edit(ctx, poise::CreateReply::default().components(vec![]))
-                    .await?;
+                components_v2::close_preview(ctx, &message, &doc).await?;
                 let Some(form) = updated else {
                     return Ok(None);
                 };
@@ -391,15 +378,13 @@ async fn show(
                     .context("Cor hexadecimal inválida")?;
                 doc.image = form.image.unwrap_or_default();
                 doc.footer = form.footer.unwrap_or_default();
-                doc.embeds("links")?;
+                components_v2::build(&doc, &copy, vec![])?;
                 break;
             }
             interaction
                 .create_response(ctx.http(), s::CreateInteractionResponse::Acknowledge)
                 .await?;
-            reply
-                .edit(ctx, poise::CreateReply::default().components(vec![]))
-                .await?;
+            components_v2::close_preview(ctx, &message, &doc).await?;
             if interaction.data.custom_id == confirm && accept.is_some() {
                 return Ok(Some(doc));
             }

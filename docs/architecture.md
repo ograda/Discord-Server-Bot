@@ -1,4 +1,4 @@
-# Arquitetura — V1.1 estabilizada
+# Arquitetura — V1 preservada e V2 incremental
 
 Um pacote Rust, Serenity 0.12 por reexport de Poise 0.6, runtime Tokio e armazenamento
 JSON existente. Não há banco, scheduler, webhooks, painel ou serviço adicional.
@@ -94,7 +94,7 @@ uma mensagem já ausente (404) em Rules/Announcement após confirmação; Publis
 preserva os IDs nesse caso. Links Remove exclui somente uma entrada do TOML;
 não usa a transação de exclusão da publicação.
 
-Preview e Publish de Links usam a mesma descrição única em `services/content`.
+Preview e Publish de Links usam o mesmo construtor Components V2 em `services/components_v2`.
 O convite principal é movido apenas na renderização para o final. Botões públicos
 são processados por `InteractionCreate`, independentemente dos collectors privados
 e da autorização administrativa. `state.link_invites` guarda o identificador e a
@@ -148,3 +148,37 @@ sucessos, falhas e ignorados por ID. O resumo inclui falhas e não processados
 quando a execução é interrompida. Atualizações do JSON usam o mutex e a gravação
 atômica existentes, sem remover dados dos outros módulos. Uma parada abrupta pode
 deixar o último checkpoint com status running; ele não dispara execução no startup.
+
+
+## V2 — Links e Activity independentes
+
+`services/components_v2.rs` converte o Document TOML em um layout tipado:
+Container, Text Display, Section/Thumbnail, Gallery opcional, Separator e
+Action Row. Somente Links utiliza `IS_COMPONENTS_V2`; Rules e Announcements
+continuam utilizando embeds. Preview e Publish compartilham esse construtor.
+Novas mensagens V2 não enviam content/embeds tradicionais.
+
+Serenity continua em 0.12.5 e Poise em 0.6.2, sem patches de dependências. Essa
+versão não possui builders V2; `Message.components` ignora componentes de topo
+que não sejam Action Rows, mas preserva a interação e seus metadados. Um teste
+real de desserialização comprova esse comportamento. Os handlers não dependem
+do layout desserializado: utilizam guilda, canal, autoria, Message ID e custom_id.
+O adaptador REST usa `serenity::Http` e seus buckets de rate limit. Um DTO mínimo
+lê flags e referências, sem reconstruir V2 em builders legados.
+
+Publish mantém as revisões do catálogo/JSON e o journal pending. Uma publicação
+V1 é convertida por um PATCH confirmado, limpando os campos legados e mantendo
+ID/anexos. Não há DELETE/POST na conversão. A flag é irreversível nessa mensagem;
+falhas preservam referências e pendência. Somente a recuperação já existente
+de mensagem apagada (404/10008) permite substituição e arquiva o ID anterior.
+
+A Activity é um build estático em `activities/invite`. A configuração opcional
+por guilda é `activities.invite.enabled`, default false. O botão usa callback
+inicial tipo 12 sem defer prévio, com deduplicação de tentativa. Rejeição HTTP
+definitiva permite fallback privado; timeout/10062/40060 não geram repetição.
+O handler valida guilda habilitada, módulo/comando e publicação; usa try_lock
+para não esperar atrás de uma publicação lenta antes de responder à interação.
+O SDK aguarda ready e chama openInviteDialog após clique em guilda/canal.
+Não há novo backend, banco, Gateway, serviço de upload ou processo Node de produção.
+Veja [Activity](activity-invite.md), [implantação](deployment-v2.md) e
+[homologação](validation-v2.md).

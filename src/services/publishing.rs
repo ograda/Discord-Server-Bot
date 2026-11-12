@@ -168,7 +168,7 @@ async fn commit_request(ctx: Context<'_>, request: Request<'_>) -> Result<String
         ctx,
         plan.kind,
         plan.channel,
-        !plan.document.embeds(plan.kind)?.is_empty(),
+        plan.kind == "links" || !plan.document.embeds(plan.kind)?.is_empty(),
     )
     .await?;
     if matches!(request.image, ImageChange::Upload(_)) {
@@ -233,23 +233,13 @@ pub async fn execute_request(
     request: Request<'_>,
 ) -> Result<String, Error> {
     let plan = request.plan;
+    if plan.kind == "links" {
+        return super::components_v2::publish(store, catalog, guild, bot, http, plan).await;
+    }
     let mut embeds = if plan.kind == "announcements" {
         vec![]
     } else {
         plan.document.embeds(plan.kind)?
-    };
-    let invite = if plan.kind == "links" {
-        super::links::published_invite(&plan.document, plan.operation)?
-    } else {
-        None
-    };
-    let components = if plan.kind == "links" {
-        super::links::invite_components(
-            &plan.document,
-            invite.as_ref().map_or("", |i| i.custom_id.as_str()),
-        )?
-    } else {
-        vec![]
     };
     let _guard = store.gate.lock().await;
     let mut state = store.read(guild)?;
@@ -307,28 +297,11 @@ pub async fn execute_request(
             Err(s::Error::Http(s::HttpError::UnsuccessfulRequest(response)))
                 if response.status_code.as_u16() == 404 =>
             {
-                let recreate_links = plan.kind == "links"
-                    && plan.action == "publish"
-                    && !plan.delete
-                    && response.error.code == 10008;
-                if plan.kind == "links" && !plan.delete && !recreate_links {
-                    return Err(s::Error::Http(s::HttpError::UnsuccessfulRequest(response)).into());
-                }
                 ensure!(
-                    plan.delete || recreate_links,
+                    plan.delete,
                     "Mensagem original não encontrada (404). IDs preservados; use Remove para reconciliar antes de uma nova publicação"
                 );
                 missing = true;
-                if recreate_links {
-                    state
-                        .archived_publications
-                        .push(super::storage::ArchivedPublication {
-                            key: plan.key.clone(),
-                            publication: publication.clone(),
-                            revision: state.revision,
-                        });
-                    tracing::info!(%guild, module = plan.kind, action = plan.action, stage = "recover_missing_publication", http_status = 404, discord_code = 10008, message = %publication.message, "Mensagem apagada; referência arquivada, criando substituta após confirmação de Publish");
-                }
             }
             Err(error) => return Err(error.into()),
         }
@@ -371,9 +344,6 @@ pub async fn execute_request(
             }
         }
         state.publications.remove(&plan.key);
-        if plan.kind == "links" {
-            state.link_invites.remove(&plan.key);
-        }
         if plan.kind == "announcements" {
             state.documents.remove(&plan.key);
             state.announcement_images.remove(&plan.key);
@@ -384,9 +354,6 @@ pub async fn execute_request(
                 .content(&document.text)
                 .embeds(embeds)
                 .allowed_mentions(s::CreateAllowedMentions::new());
-            if plan.kind == "links" {
-                edit = edit.components(components);
-            }
             if let Some(attachments) = attachments {
                 edit = edit.attachments(attachments);
             }
@@ -398,9 +365,6 @@ pub async fn execute_request(
                 .content(&document.text)
                 .embeds(embeds)
                 .allowed_mentions(s::CreateAllowedMentions::new());
-            if plan.kind == "links" {
-                create = create.components(components);
-            }
             if plan.kind == "announcements" {
                 for file in request.image.files() {
                     create = create.add_file(file);
@@ -422,13 +386,6 @@ pub async fn execute_request(
                 state.announcement_images.remove(&plan.key);
             }
             state.documents.insert(plan.key.clone(), document.clone());
-        }
-        if plan.kind == "links" {
-            if let Some(invite) = invite {
-                state.link_invites.insert(plan.key.clone(), invite);
-            } else {
-                state.link_invites.remove(&plan.key);
-            }
         }
     }
     state.pending = None;

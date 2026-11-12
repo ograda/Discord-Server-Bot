@@ -29,14 +29,22 @@ segue o checklist em `docs/v1.1.md`. Não há Rules Screening próprio.
 
 SQLite somente quando houver persistência dinâmica; configuração estática em TOML.
 
-## V2.0 — Música e entretenimento (planejado)
+## V2.0 — Components V2 e Activity (em desenvolvimento)
 
-- Lavalink Server em contêiner independente e cliente integrado ao Rust.
-- Reprodução em voz, filas, playlists e controles interativos.
-- Múltiplas identidades musicais e reprodução simultânea em diferentes canais
-  de voz do mesmo servidor, usando identidades distintas.
-- Minijogos, rankings e pontuações persistentes.
+Primeira entrega na branch `feat/v2-components-activity`, versão `2.0.0-dev.1`:
 
-Rust continuará responsável por comandos, permissões e gerenciamento dos players.
-Várias identidades poderão compartilhar o mesmo Lavalink. Nenhum componente de
-áudio ou abstração antecipada faz parte da V1.
+- Links em Container nativo, com textos, thumbnail e botões internos.
+- Adaptador REST tipado isolado, mantendo Serenity/Poise e demais módulos V1.
+- Conversão confirmada por PATCH, preservando Message ID e estados existentes.
+- Activity estática TypeScript/Vite/Embedded App SDK com openInviteDialog.
+- LAUNCH_ACTIVITY por botão, configuração opt-in independente por guilda.
+- Testes locais, build frontend e roteiro de homologação em servidor elegível.
+
+A V1 funcional permanece no histórico. Não há release 2.0 estável nem validação
+real da Activity em servidores grandes. Veja [restrições e preparação](activity-invite.md).
+
+### Evoluções futuras, fora desta entrega
+
+Lavalink, música, múltiplas identidades musicais, scheduler e minijogos continuam
+planejados para etapas posteriores. Nenhum desses serviços ou bancos foi adicionado
+à primeira entrega da V2.

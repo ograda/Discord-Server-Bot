@@ -10,6 +10,8 @@ use sha2::{Digest, Sha256};
 
 pub const ACTIONS: &[&str] = &["preview", "publish", "update", "reset", "add", "remove"];
 pub const INVITE_FRIENDS_ID: &str = "links-invite-friends";
+pub const ACTIVITY_UNAVAILABLE: &str =
+    "Lembra o besta do Ograda que essa funcionalidade ainda não está disponível";
 
 pub fn handles_invite_component(custom_id: &str) -> bool {
     custom_id == INVITE_FRIENDS_ID || custom_id.starts_with("links-copy:")
@@ -23,11 +25,7 @@ fn private_response(content: String) -> s::CreateInteractionResponseMessage {
 }
 
 pub fn invite_friends_response(custom_id: &str) -> Option<s::CreateInteractionResponseMessage> {
-    (custom_id == INVITE_FRIENDS_ID).then(|| {
-        private_response(
-            "Lembra o besta do Ograda que essa funcionalidade ainda não está disponível".into(),
-        )
-    })
+    (custom_id == INVITE_FRIENDS_ID).then(|| private_response(ACTIVITY_UNAVAILABLE.into()))
 }
 
 pub fn action_option(_: s::CreateCommandOption) -> s::CreateCommandOption {
@@ -185,30 +183,139 @@ pub fn resolve_copy<'a>(state: &'a State, origin: CopyOrigin, custom_id: &str) -
     Ok(&invite.url)
 }
 
+/// Same publication and guild checks as Copy; no administrative permission required.
+pub fn resolve_activity(state: &State, origin: CopyOrigin) -> Result<()> {
+    for invite in state.link_invites.values() {
+        if resolve_copy(state, origin, &invite.custom_id).is_ok() {
+            return Ok(());
+        }
+    }
+    anyhow::bail!("Botão não corresponde à publicação de Links desta guilda")
+}
+
+pub fn activity_response(enabled: bool, valid_context: bool) -> s::CreateInteractionResponse {
+    if !valid_context {
+        s::CreateInteractionResponse::Message(private_response(
+            "Activity disponível somente em uma publicação de Links válida nesta guilda.".into(),
+        ))
+    } else if enabled {
+        s::CreateInteractionResponse::LaunchActivity
+    } else {
+        s::CreateInteractionResponse::Message(private_response(ACTIVITY_UNAVAILABLE.into()))
+    }
+}
+
+/// Launch must be the INITIAL callback (type 12); never defer before this call.
+/// Only a definitive rejection allows a fallback callback. Timeouts, 10062 and
+/// 40060 are ambiguous/expired: do not retry or risk responding twice.
+pub async fn respond_activity(
+    http: &s::Http,
+    responses: &crate::core::interactions::Responses,
+    id: s::InteractionId,
+    token: &str,
+    enabled: bool,
+    valid_context: bool,
+) -> Result<()> {
+    use super::components_v2::private_http;
+    use crate::core::interactions::{self, Failure, Stage};
+    let response = activity_response(enabled, valid_context);
+    tracing::info!(module="links", action="invite_activity", stage="callback", interaction=%id, enabled, valid_context, "Respondendo ao botão de Activity");
+    match private_http(interactions::initial(
+        http,
+        responses,
+        id,
+        token,
+        Stage::ActivityLaunch,
+        response,
+    ))
+    .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let rejected = error.downcast_ref::<Failure>().is_some_and(|f| {
+                enabled
+                    && valid_context
+                    && !f.duplicate
+                    && matches!(f.status, Some(400 | 403 | 404))
+                    && !matches!(f.code, Some(10062 | 40060 | 10015))
+            });
+            if !rejected {
+                return Err(error);
+            }
+            tracing::warn!(module="links", action="invite_activity", stage="launch_rejected", cause=%error, "Lançamento recusado; enviando fallback privado após rejeição definitiva");
+            private_http(http.create_interaction_response(
+                id,
+                token,
+                &activity_response(false, true),
+                vec![],
+            ))
+            .await
+            .map_err(|e| interactions::tagged(Stage::ActivityLaunch, id.get(), e))?;
+            Ok(())
+        }
+    }
+}
+
 /// Persistent Gateway handler, independent of administrative command collectors.
 pub async fn handle_copy(
     ctx: &s::Context,
     interaction: &s::ComponentInteraction,
     data: &crate::core::Data,
 ) -> Result<()> {
-    // Stateless routing survives restarts and is also used by private previews.
-    if let Some(response) = invite_friends_response(&interaction.data.custom_id) {
-        interaction
-            .create_response(&ctx.http, s::CreateInteractionResponse::Message(response))
-            .await?;
-        return Ok(());
+    if interaction.data.custom_id == INVITE_FRIENDS_ID {
+        let cfg = interaction
+            .guild_id
+            .and_then(|g| data.config.guilds.get(&g));
+        let allowed =
+            cfg.is_some_and(|cfg| cfg.command_enabled("links", data.config.global.modules));
+        let enabled = allowed && cfg.is_some_and(|cfg| cfg.activities.invite.enabled);
+        let mut valid = false;
+        if allowed && let Some(guild) = interaction.guild_id {
+            let origin = CopyOrigin {
+                guild,
+                message_guild: interaction.message.guild_id,
+                channel: interaction.channel_id,
+                message: interaction.message.id,
+                author: interaction.message.author.id,
+                bot: ctx.cache.current_user().id,
+            };
+            // Never queue behind a slow publication and miss the 3-second callback deadline.
+            if let Ok(_guard) = data.store.gate.try_lock() {
+                valid = data
+                    .store
+                    .read(guild)
+                    .is_ok_and(|state| resolve_activity(&state, origin).is_ok());
+            }
+            // Private previews are short-lived, bot-authored and scoped to this interaction.
+            let preview = interaction
+                .message
+                .flags
+                .is_some_and(|f| f.contains(s::MessageFlags::EPHEMERAL))
+                && origin.author == origin.bot
+                && origin.message_guild.is_none_or(|g| g == guild)
+                && interaction.message.channel_id == origin.channel;
+            valid |= preview;
+        }
+        return respond_activity(
+            &ctx.http,
+            &data.interactions,
+            interaction.id,
+            &interaction.token,
+            enabled,
+            valid,
+        )
+        .await;
     }
     if !interaction.data.custom_id.starts_with("links-copy:") {
         return Ok(());
     }
-    interaction
-        .create_response(
-            &ctx.http,
-            s::CreateInteractionResponse::Defer(
-                s::CreateInteractionResponseMessage::new().ephemeral(true),
-            ),
-        )
-        .await?;
+    super::components_v2::private_http(interaction.create_response(
+        &ctx.http,
+        s::CreateInteractionResponse::Defer(
+            s::CreateInteractionResponseMessage::new().ephemeral(true),
+        ),
+    ))
+    .await?;
     let result = async {
         let guild = interaction
             .guild_id
@@ -219,7 +326,7 @@ pub async fn handle_copy(
             .get(&guild)
             .ok_or_else(|| anyhow::anyhow!("Guilda não autorizada"))?;
         ensure!(
-            cfg.enabled && cfg.modules.unwrap_or(data.config.global.modules).links,
+            cfg.command_enabled("links", data.config.global.modules),
             "Links desabilitado nesta guilda"
         );
         let _guard = data.store.gate.lock().await;
@@ -250,13 +357,14 @@ pub async fn handle_copy(
             "Convite indisponível ou botão desatualizado. Solicite ao administrador que confira o TOML e publique o quadro novamente.".into()
         }
     };
-    interaction
-        .edit_response(
+    super::components_v2::private_http(
+        interaction.edit_response(
             &ctx.http,
             s::EditInteractionResponse::new()
                 .content(content)
                 .allowed_mentions(s::CreateAllowedMentions::new()),
-        )
-        .await?;
+        ),
+    )
+    .await?;
     Ok(())
 }

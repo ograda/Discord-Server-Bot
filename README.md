@@ -1,5 +1,23 @@
 # Discord Server Bot
 
+## V2.0 em desenvolvimento — Links e Activity
+
+A branch `feat/v2-components-activity` inicia a versão `2.0.0-dev.1`, preservando
+a V1 no histórico. Links utiliza um único Container Components V2, com cor do
+TOML, textos e botões internos. Preview e Publish compartilham o construtor.
+Publish converte mensagens antigas por edição após confirmação, mantendo o
+Message ID; a flag Components V2 é irreversível nessa mensagem.
+
+Convidar amigos integra `LAUNCH_ACTIVITY`. A Activity estática em
+`activities/invite` usa TypeScript/Vite e o Embedded App SDK para abrir o diálogo
+nativo de convites. Fica **desabilitada por padrão**, por guilda, e mantém o aviso
+provisório enquanto desligada. Copiar convite continua independente.
+
+Veja [Activity e configuração no Portal](docs/activity-invite.md),
+[Links e migração](docs/links.md), [implantação](docs/deployment-v2.md) e
+[homologação V2](docs/validation-v2.md). Ainda não há release estável 2.0 nem
+homologação real da Activity. Servidores maiores exigem elegibilidade oficial.
+
 Bot privado para administrar 2–3 servidores próprios, com código-fonte público.
 Monólito modular em Rust, desenvolvido no Windows e preparado para VPS Linux.
 O objetivo é evoluir administração, automações e integrações incrementalmente.
@@ -28,9 +46,9 @@ Em Links, Remove exclui somente um link do TOML específico, após confirmação
 preserva o quadro e sua publicação. Nos demais módulos, Remove apaga a publicação selecionada.
 
 Links Add usa um modal de cinco campos e confirma antes de salvar. Cada quadro
-usa um único embed, com legenda `label` opcional e convite Discord por último.
+usa um único Container Components V2, com legenda `label` opcional e convite Discord por último.
 Copiar convite fornece o endereço privadamente; Convidar amigos mostra um aviso
-privado de indisponibilidade. O convite pode ser aberto pelo link no embed. Veja o
+privado de indisponibilidade quando a Activity está desabilitada. O convite pode ser aberto pelo link no quadro. Veja o
 [guia de Links e homologação](docs/links.md).
 
 Rules e Links usam TOML como fonte de conteúdo. Documentos antigos do JSON são
@@ -214,7 +232,7 @@ cargo test
 cargo build
 ```
 
-CI executa esses checks em pushes e pull requests para `main`, sem deploy ou
+CI executa esses checks em pushes para `main`/`feat/v2-*` e pull requests para `main`, sem deploy ou
 publicação de imagens. Testes locais cobrem parsing, validação, duplicidade,
 seleção de servidor e regras de autorização; não precisam de token.
 
@@ -238,8 +256,8 @@ Faça backup seguro das configurações privadas; logs têm rotação configurad
 
 Veja [arquitetura](docs/architecture.md) e [roadmap](docs/roadmap.md).
 V1 evoluirá a administração; V1.2 adicionará automação e SQLite quando necessário;
-V2 planeja Lavalink independente, múltiplas identidades musicais e minijogos.
-Essas funcionalidades futuras ainda não estão implementadas.
+V2 inicia com Components V2 em Links e a Activity de convites. Música, Lavalink,
+scheduler e minijogos permanecem para entregas futuras.
 
 Nenhuma licença foi adicionada; a escolha cabe ao proprietário.
 

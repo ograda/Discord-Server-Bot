@@ -1,6 +1,7 @@
 pub mod announcements;
 pub mod attachments;
 pub mod catalog;
+pub mod components_v2;
 pub mod content;
 pub mod links;
 pub mod profile;

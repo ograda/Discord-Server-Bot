@@ -43,17 +43,19 @@ entradas herdadas após reiniciar.
 
 ## Apresentação
 
-Cada quadro utiliza um único embed, com título nativo e cor do TOML. Introdução
-e links ficam na mesma descrição. Cada entrada apresenta emoji, título e ação
-clicável na mesma linha, seguidos pela descrição na próxima linha. Os blocos
-são separados por duas quebras; quebras internas e Markdown são preservados.
-`label` é opcional e tem fallback **Abrir link**. O formulário Add usa esse padrão;
-a legenda pode ser personalizada diretamente no TOML.
+Cada quadro utiliza um único Container Components V2, com cor lateral do TOML
+(padrão #5865F2), título destacado, introdução e links Markdown. Emoji, título
+e legenda clicável ficam na mesma linha; a descrição fica na seguinte. Blocos
+consecutivos têm duas quebras e preservam quebras internas. `label` mantém o
+fallback **Abrir link**; o convite usa **Link do convite** e fica por último.
 
-Se disponível, o ícone da guilda obtido pela API aparece como thumbnail. Sem
-ícone, não é acrescentada uma imagem alternativa. Descrição de até 4.096 unidades
-UTF-16 e embed de até 6.000, incluindo título e rodapé, são validados antes de
-salvar/publicar. Conteúdo excessivo gera erro, sem truncamento ou paginação.
+O ícone da guilda aparece como Thumbnail em uma Section, quando disponível.
+Não há outro embed nem avatar substituto. Uma Gallery conserva a imagem
+opcional, e rodapé/texto do quadro são Text Displays. Separator e Action Row
+dos botões ficam dentro do Container. O construtor valida 4.000 unidades UTF-16
+de texto total, RGB e até 40 componentes contando filhos, sem truncamento.
+Controles e avisos privados também entram na validação. O Discord decide a
+largura final. Rules e Announcements continuam utilizando seus embeds.
 
 ## Convite especial do Discord
 
@@ -61,16 +63,18 @@ salvar/publicar. Conteúdo excessivo gera erro, sem truncamento ou paginação.
 oficiais `discord.gg/<código>` e `discord.com/invite/<código>` também são reconhecidas
 para compatibilidade. Outras páginas do Discord não são classificadas como convites.
 Um quadro aceita somente um convite principal; múltiplos convites geram erro de
-configuração. Ele aparece sempre por último no embed, sem reordenar o TOML.
+configuração. Ele aparece sempre por último no quadro, sem reordenar o TOML.
 
 A linha do convite mostra **Link do convite** clicável e a mensagem recebe dois botões:
 
 - **📋 Copiar convite** responde privadamente com a URL configurada em bloco de
   código, para copiar manualmente. Não acessa nem afirma alterar a área de transferência.
-- **🎮 Convidar amigos** responde somente a quem clicou: “Lembra o besta do Ograda
-  que essa funcionalidade ainda não está disponível”. Usa um `custom_id` fixo no
-  handler persistente e não abre links, canais ou Activities. O endereço continua
-  acessível pelo **Link do convite** dentro do embed.
+- **🎮 Convidar amigos** usa o custom_id estável `links-invite-friends`. Com
+  `[activities.invite] enabled=false` (padrão), responde privadamente:
+  “Lembra o besta do Ograda que essa funcionalidade ainda não está disponível”.
+  Quando habilitada em uma guilda elegível, utiliza LAUNCH_ACTIVITY (tipo 12)
+  para iniciar a Activity da mesma aplicação. Não abre URLs externas. O diálogo
+  nativo é aberto por um botão dentro da Activity. Veja [Activity](activity-invite.md).
 
 Membros comuns podem usar esses botões. O handler de cópia valida guilda,
 canal, Message ID e autoria da publicação gerenciada; não exige autorização
@@ -140,7 +144,7 @@ do arquivo específico e recarrega, sem publicar nem apagar referências.
 1. Reinicie com o binário atualizado e reabra `/links`. Confira somente `ação`
    obrigatória e `id` opcional; ações desabilitadas devem desaparecer por guilda.
 2. Teste Preview com um quadro, com `default` e com vários sem padrão. Confira
-   embed único, cor, ícone, espaçamento, Markdown e convite por último.
+   Container único, cor, ícone, espaçamento, Markdown e convite por último.
 3. Teste Add, os cinco campos, URL inválida, duplicidade, Cancelar e Salvar.
    Confira o TOML específico, backup e memória; a mensagem pública deve permanecer igual.
 4. Teste Remove com ID, sem ID e com IDs repetidos em quadros distintos.
@@ -148,10 +152,26 @@ do arquivo específico e recarrega, sem publicar nem apagar referências.
 5. Teste Publish, Editar e Cancelar. Publique duas vezes e confira o mesmo Message ID.
 6. Como membro comum, use Copiar convite e confira a resposta privada; Convidar
    amigos deve mostrar somente o aviso privado. Confira o Link do convite no
-   embed. Reinicie e teste novamente os botões públicos.
+   quadro. Reinicie e teste novamente os botões públicos.
 7. Modifique o convite no TOML e use Update: a publicação deve manter seu convite
    anterior até Publish. Teste erro por múltiplos convites e por limite de descrição.
 8. Teste Reset e duas guildas, verificando backups e isolamento de conteúdo/estado.
 
 Os testes automatizados usam apenas diretórios temporários e HTTP local. A
 homologação de Gateway, modals e aparência real é realizada separadamente.
+
+## Migração de publicações V1
+
+Preview não modifica mensagens públicas. Publish informa a conversão irreversível
+na confirmação e utiliza PATCH na mesma mensagem, mantendo o Message ID. O payload
+ativa IS_COMPONENTS_V2, limpa content/poll com null e embeds/sticker_ids com arrays
+vazios; conserva os anexos existentes. Isso é permitido pelo endpoint oficial de
+[edição de mensagem](https://docs.discord.com/developers/resources/message#edit-message).
+Não há DELETE/POST ou duplicação durante essa conversão. Mensagens já V2 também
+são atualizadas por PATCH. Campos JSON de outros módulos permanecem intactos.
+
+Falha deixa referências/pending preservados e não cria outra mensagem. A flag não
+pode ser removida dessa mensagem; voltar ao executável V1 não desfaz a conversão.
+O caso distinto de mensagem já apagada continua usando recuperação por 404/10008
+após confirmação, arquivando o ID anterior. Veja [implantação](deployment-v2.md)
+e o roteiro completo de [homologação V2](validation-v2.md).

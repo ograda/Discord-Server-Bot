@@ -67,6 +67,8 @@ pub struct Modules {
 pub struct GuildConfig {
     pub guild_id: GuildId,
     #[serde(default)]
+    pub activities: Activities,
+    #[serde(default)]
     pub profile: crate::services::profile::ProfileConfig,
     pub alias: Option<String>,
     pub name: Option<String>,
@@ -91,6 +93,18 @@ pub struct GuildConfig {
     pub roles: Roles,
     #[serde(default)]
     pub messaging: Messaging,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Activities {
+    pub invite: InviteActivity,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct InviteActivity {
+    pub enabled: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]

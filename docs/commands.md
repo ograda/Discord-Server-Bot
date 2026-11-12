@@ -62,10 +62,11 @@ entrada do TOML, preservando quadro, outras entradas e Message IDs.
 
 Publish apresenta Editar/Publicar/Cancelar; confirmar cria ou atualiza a mesma
 mensagem. Update recarrega o arquivo inteiro; Reset restaura defaults com backup.
-O embed único apresenta links na mesma linha dos títulos, com `label` opcional
+O Container Components V2 apresenta links na mesma linha dos títulos, com `label` opcional
 (padrão Abrir link). O convite `kind="discord_invite"`, também detectado pelas
-URLs oficiais, aparece por último com botões de cópia manual privada e abertura
-direta. Veja [formatação, persistência e homologação](links.md).
+URLs oficiais, aparece por último com botões de cópia manual privada e lançamento
+da Activity opt-in por guilda. Desabilitada, a Activity mantém o aviso provisório
+privado. Veja [formatação, persistência e homologação](links.md).
 
 O formato antigo `title`, `description`, `[[entries]]` vira um quadro `default`.
 Sua chave de publicação `links` continua válida. Ao adotar `[[boards]]`, o registro
