@@ -32,6 +32,10 @@ pub struct State {
     pub documents: HashMap<String, Document>,
     pub publications: HashMap<String, Publication>,
     pub pending: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_operation: Option<super::publication_state::Pending>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub publication_history: Vec<super::publication_state::History>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ArchivedPublication {
@@ -196,6 +200,17 @@ impl Store {
         file.as_file().sync_all()?;
         file.persist(path).map_err(|e| e.error)?;
         Ok(())
+    }
+    pub fn backup_publications(&self, guild: GuildId) -> Result<PathBuf> {
+        let path = self.path(guild);
+        let original = fs::read(&path)?;
+        let mut backup = tempfile::Builder::new()
+            .prefix("state.pre-reconcile-")
+            .suffix(".json.bak")
+            .tempfile_in(path.parent().context("Diretório inválido")?)?;
+        backup.write_all(&original)?;
+        backup.as_file().sync_all()?;
+        Ok(backup.keep().map_err(|e| e.error)?.1)
     }
 }
 

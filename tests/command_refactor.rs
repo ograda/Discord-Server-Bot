@@ -864,6 +864,10 @@ fn mock_discord(
                 }
             };
             records.push((headers.lines().next().unwrap().to_string(), payload));
+            if body == "SIMULATE_TIMEOUT_AFTER_RECEIVING" {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                continue;
+            }
             write!(socket,"HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
         }
         records
@@ -883,6 +887,655 @@ fn message(author: u64) -> String {
     message.guild_id = Some(s::GuildId::new(1));
     message.author.id = s::UserId::new(author);
     serde_json::to_string(&message).unwrap()
+}
+
+fn journal_channel() -> (u16, String) {
+    (200, r#"{"id":"11","guild_id":"1"}"#.into())
+}
+
+#[test]
+fn announcement_reconciliation_matches_attachment_identity_without_expired_signatures_or_binary_data()
+ {
+    use discord_server_bot::services::publication_state as journal;
+    let mut pending = journal_draft("announcements", journal::Write::Edit);
+    pending.expected["embeds"][0]["image"] =
+        serde_json::json!({"url":"attachment://announcement-hash.png"});
+    let mut actual: serde_json::Value = serde_json::from_str(&message(9)).unwrap();
+    actual["embeds"] = pending.expected["embeds"].clone();
+    actual["embeds"][0]["image"]["url"] = serde_json::json!(
+        "https://media.discordapp.net/attachments/11/201/announcement-hash.png?ex=old"
+    );
+    actual["attachments"] = serde_json::json!([{"id":"201","filename":"announcement-hash.png","url":"https://cdn.discordapp.com/attachments/11/201/announcement-hash.png?ex=new"}]);
+    assert!(journal::matches(&pending, &actual, s::UserId::new(9)));
+    actual["embeds"][0]["image"]["url"] =
+        serde_json::json!("https://external.example/attachments/11/201/announcement-hash.png");
+    assert!(!journal::matches(&pending, &actual, s::UserId::new(9)));
+}
+
+fn journal_draft(
+    module: &str,
+    write: discord_server_bot::services::publication_state::Write,
+) -> discord_server_bot::services::publication_state::Pending {
+    use discord_server_bot::services::publication_state::Pending;
+    let doc = Document {
+        title: "Test".into(),
+        description: "Body".into(),
+        ..Default::default()
+    };
+    Pending {
+        guild: s::GuildId::new(1),
+        operation: 123,
+        key: if module == "links" {
+            "links:test".into()
+        } else {
+            "announcement-123".into()
+        },
+        module: module.into(),
+        action: if write == discord_server_bot::services::publication_state::Write::Edit {
+            "edit".into()
+        } else {
+            "create".into()
+        },
+        channel: s::ChannelId::new(11),
+        write,
+        previous: None,
+        confirmed_message: None,
+        rejected: None,
+        expected: serde_json::json!({"content":"", "embeds":doc.embeds("announcements").unwrap()}),
+        document: Some(doc),
+        invite: None,
+    }
+}
+
+#[tokio::test]
+async fn pending_edit_requires_matching_payload_and_real_guild_ownership() {
+    use discord_server_bot::services::{components_v2 as v2, publication_state as journal};
+    for case in ["match", "different", "foreign"] {
+        let dir = fixture();
+        let store = Store::open(dir.path().join("data")).unwrap();
+        let guild = s::GuildId::new(1);
+        let mut pending = journal_draft("links", journal::Write::Edit);
+        let publication = Publication {
+            channel: s::ChannelId::new(11),
+            message: s::MessageId::new(100),
+        };
+        pending.previous = Some(publication.clone());
+        pending.document = None;
+        pending.expected = serde_json::to_value(
+            v2::build(
+                &Document {
+                    title: "desired".into(),
+                    ..Default::default()
+                },
+                "copy",
+                vec![],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut state = State::default();
+        state.publications.insert(pending.key.clone(), publication);
+        journal::begin(&store, &mut state, pending.clone()).unwrap();
+        let mut actual: serde_json::Value = serde_json::from_str(&message(9)).unwrap();
+        actual["flags"] = serde_json::json!(32768);
+        actual["components"] = pending.expected["components"].clone();
+        actual["components"][0]["id"] = serde_json::json!(44);
+        if case == "different" {
+            actual["components"][0]["components"][0]["content"] = serde_json::json!("old content");
+        }
+        let mut responses = vec![if case == "foreign" {
+            (200, r#"{"id":"11","guild_id":"2"}"#.into())
+        } else {
+            journal_channel()
+        }];
+        if case != "foreign" {
+            responses.push((200, actual.to_string()));
+        }
+        let (http, server) = mock_discord(responses);
+        let result = journal::ensure_ready(&store, guild, s::UserId::new(9), &http).await;
+        assert_eq!(result.is_ok(), case == "match");
+        let after = store.read(guild).unwrap();
+        assert_eq!(after.publications[&pending.key].message.get(), 100);
+        assert_eq!(after.pending.is_some(), case != "match");
+        assert!(
+            store
+                .read(s::GuildId::new(2))
+                .unwrap()
+                .publications
+                .is_empty()
+        );
+        server.join().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn explicit_message_lookup_requires_operation_identity_and_delete_reconciliation_requires_known_404()
+ {
+    use discord_server_bot::services::publication_state as journal;
+    for nonce in ["123", "other"] {
+        let dir = fixture();
+        let store = Store::open(dir.path().join("data")).unwrap();
+        let guild = s::GuildId::new(1);
+        let pending = journal_draft("announcements", journal::Write::Create);
+        let mut state = State::default();
+        journal::begin(&store, &mut state, pending.clone()).unwrap();
+        let mut actual: serde_json::Value = serde_json::from_str(&message(9)).unwrap();
+        actual["nonce"] = serde_json::json!(nonce);
+        actual["embeds"] = pending.expected["embeds"].clone();
+        let (http, server) = mock_discord(vec![journal_channel(), (200, actual.to_string())]);
+        assert_eq!(
+            journal::inspect_message(
+                &state,
+                guild,
+                s::UserId::new(9),
+                &http,
+                s::MessageId::new(100)
+            )
+            .await
+            .is_ok(),
+            nonce == "123"
+        );
+        server.join().unwrap();
+    }
+    for (status, code) in [(404, 10008), (403, 50001)] {
+        let dir = fixture();
+        let store = Store::open(dir.path().join("data")).unwrap();
+        let guild = s::GuildId::new(1);
+        let mut pending = journal_draft("announcements", journal::Write::Delete);
+        let publication = Publication {
+            channel: s::ChannelId::new(11),
+            message: s::MessageId::new(100),
+        };
+        pending.previous = Some(publication.clone());
+        let mut state = State::default();
+        state.publications.insert(pending.key.clone(), publication);
+        journal::begin(&store, &mut state, pending.clone()).unwrap();
+        let (http, server) = mock_discord(vec![
+            journal_channel(),
+            (
+                status,
+                serde_json::json!({"code":code,"message":"test"}).to_string(),
+            ),
+        ]);
+        let result = journal::ensure_ready(&store, guild, s::UserId::new(9), &http).await;
+        assert_eq!(result.is_ok(), code == 10008);
+        let after = store.read(guild).unwrap();
+        assert_eq!(after.publications.contains_key(&pending.key), code != 10008);
+        assert_eq!(after.pending.is_some(), code != 10008);
+        server.join().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn links_edits_omit_noneditable_stickers_and_definitive_rejections_do_not_block_announcements()
+ {
+    use discord_server_bot::services::publication_state as journal;
+    for converted in [false, true] {
+        let dir = fixture();
+        let config = config::load(dir.path()).unwrap();
+        let catalog = Catalog::new(&config);
+        let store = Store::open(dir.path().join("data")).unwrap();
+        let guild = s::GuildId::new(1);
+        let mut state = State::default();
+        state.publications.insert(
+            "links:test".into(),
+            Publication {
+                channel: s::ChannelId::new(11),
+                message: s::MessageId::new(100),
+            },
+        );
+        store.write(guild, &state).unwrap();
+        let mut original: serde_json::Value = serde_json::from_str(&message(9)).unwrap();
+        original["flags"] = serde_json::json!(if converted { 32768 } else { 0 });
+        let (http, server) = mock_discord(vec![
+            (200, original.to_string()),
+            (
+                403,
+                r#"{"code":50080,"message":"Cannot edit stickers within a message"}"#.into(),
+            ),
+        ]);
+        let plan = Plan {
+            operation: 123,
+            kind: "links",
+            action: "publish".into(),
+            key: "links:test".into(),
+            document: Document {
+                title: "Links".into(),
+                ..Default::default()
+            },
+            channel: s::ChannelId::new(11),
+            revision: 0,
+            content_revision: Some(0),
+            delete: false,
+        };
+        let error = publishing::execute(&store, &catalog, guild, s::UserId::new(9), &http, &plan)
+            .await
+            .unwrap_err();
+        assert_eq!(journal::rejection(&error).unwrap().discord_code, 50080);
+        let after = store.read(guild).unwrap();
+        assert!(after.pending.is_none() && after.pending_operation.is_none());
+        assert_eq!(after.publications[&plan.key].message.get(), 100);
+        assert_eq!(
+            after.publication_history[0].rejection.unwrap().http_status,
+            403
+        );
+        journal::ensure_ready(&store, guild, s::UserId::new(9), &http)
+            .await
+            .unwrap(); // No HTTP and no guild-wide blockage.
+        let calls = server.join().unwrap();
+        let payload = &calls[1].1;
+        assert!(payload.get("sticker_ids").is_none());
+        assert_eq!(payload["flags"], 32768);
+        if converted {
+            assert!(
+                payload.get("content").is_none()
+                    && payload.get("embeds").is_none()
+                    && payload.get("poll").is_none()
+            );
+        } else {
+            assert!(payload["content"].is_null());
+            assert_eq!(payload["embeds"], serde_json::json!([]));
+        }
+    }
+}
+
+#[tokio::test]
+async fn sticker_messages_require_explicit_replacement_and_keep_original_until_success() {
+    use discord_server_bot::services::components_v2 as v2;
+    for outcome in ["blocked", "success", "rejected", "unknown"] {
+        let dir = fixture();
+        let config = config::load(dir.path()).unwrap();
+        let catalog = Catalog::new(&config);
+        let store = Store::open(dir.path().join("data")).unwrap();
+        let guild = s::GuildId::new(1);
+        let mut state = State::default();
+        state.publications.insert(
+            "links:test".into(),
+            Publication {
+                channel: s::ChannelId::new(11),
+                message: s::MessageId::new(100),
+            },
+        );
+        store.write(guild, &state).unwrap();
+        let mut original: serde_json::Value = serde_json::from_str(&message(9)).unwrap();
+        original["sticker_items"] =
+            serde_json::json!([{"id":"5","name":"sticker","format_type":1}]);
+        let mut created: serde_json::Value = serde_json::from_str(&message(9)).unwrap();
+        created["id"] = serde_json::json!("200");
+        created["flags"] = serde_json::json!(32768);
+        let mut responses = vec![(200, original.to_string())];
+        match outcome {
+            "success" => responses.push((200, created.to_string())),
+            "rejected" => responses.push((
+                403,
+                r#"{"code":50013,"message":"Missing Permissions"}"#.into(),
+            )),
+            "unknown" => responses.push((200, "not json".into())),
+            _ => (),
+        }
+        let (http, server) = mock_discord(responses);
+        let plan = Plan {
+            operation: 123,
+            kind: "links",
+            action: "publish".into(),
+            key: "links:test".into(),
+            document: Document {
+                title: "Links".into(),
+                ..Default::default()
+            },
+            channel: s::ChannelId::new(11),
+            revision: 0,
+            content_revision: Some(0),
+            delete: false,
+        };
+        let result = v2::publish_mode(
+            &store,
+            &catalog,
+            guild,
+            s::UserId::new(9),
+            &http,
+            &plan,
+            outcome != "blocked",
+        )
+        .await;
+        assert_eq!(result.is_ok(), outcome == "success");
+        let after = store.read(guild).unwrap();
+        assert_eq!(
+            after.publications[&plan.key].message.get(),
+            if outcome == "success" { 200 } else { 100 }
+        );
+        assert_eq!(
+            after.archived_publications.len(),
+            usize::from(outcome == "success")
+        );
+        assert_eq!(after.pending.is_some(), outcome == "unknown");
+        let calls = server.join().unwrap();
+        assert!(
+            calls
+                .iter()
+                .all(|c| !c.0.starts_with("DELETE ") && !c.0.starts_with("PATCH "))
+        );
+        if outcome != "blocked" {
+            assert!(calls[1].0.starts_with("POST "));
+            assert_eq!(calls[1].1["nonce"], "123");
+            assert_eq!(calls[1].1["enforce_nonce"], true);
+        }
+        assert!(
+            store
+                .read(s::GuildId::new(2))
+                .unwrap()
+                .publications
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
+async fn confirmed_announcement_receipt_reconciles_after_restart_without_new_post() {
+    use discord_server_bot::services::publication_state as journal;
+    let dir = fixture();
+    let root = dir.path().join("data");
+    let guild = s::GuildId::new(1);
+    let pending = journal_draft("announcements", journal::Write::Create);
+    {
+        let store = Store::open(root.clone()).unwrap();
+        let mut state = State::default();
+        journal::begin(&store, &mut state, pending.clone()).unwrap();
+        journal::received(&store, &mut state, guild, s::MessageId::new(100)).unwrap();
+    }
+    let store = Store::open(root).unwrap();
+    let mut actual: serde_json::Value = serde_json::from_str(&message(9)).unwrap();
+    actual["embeds"] = pending.expected["embeds"].clone();
+    let (http, server) = mock_discord(vec![journal_channel(), (200, actual.to_string())]);
+    journal::ensure_ready(&store, guild, s::UserId::new(9), &http)
+        .await
+        .unwrap();
+    let state = store.read(guild).unwrap();
+    assert!(state.pending.is_none());
+    assert_eq!(state.publications[&pending.key].message.get(), 100);
+    assert_eq!(state.documents[&pending.key].description, "Body");
+    assert_eq!(state.publication_history[0].outcome, "reconciled_success");
+    assert!(server.join().unwrap()[0].0.starts_with("GET "));
+    let path = dir.path().join("data/guilds/1");
+    assert!(fs::read_dir(path).unwrap().any(|p| {
+        p.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("state.pre-reconcile-")
+    }));
+    assert!(
+        store
+            .read(s::GuildId::new(2))
+            .unwrap()
+            .publications
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn post_with_unknown_response_recovers_only_positive_nonce_match_not_empty_search() {
+    use discord_server_bot::services::publication_state as journal;
+    for found in [false, true] {
+        let dir = fixture();
+        let store = Store::open(dir.path().join("data")).unwrap();
+        let guild = s::GuildId::new(1);
+        let pending = journal_draft("announcements", journal::Write::Create);
+        let mut state = State::default();
+        journal::begin(&store, &mut state, pending.clone()).unwrap();
+        let mut actual: serde_json::Value = serde_json::from_str(&message(9)).unwrap();
+        actual["embeds"] = pending.expected["embeds"].clone();
+        actual["nonce"] = serde_json::json!("123");
+        let body = if found {
+            serde_json::json!([actual])
+        } else {
+            serde_json::json!([])
+        };
+        let (http, server) = mock_discord(vec![journal_channel(), (200, body.to_string())]);
+        let result = journal::ensure_ready(&store, guild, s::UserId::new(9), &http).await;
+        assert_eq!(result.is_ok(), found);
+        assert_eq!(store.read(guild).unwrap().pending.is_some(), !found);
+        let calls = server.join().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().all(|c| c.0.starts_with("GET ")));
+        if !found {
+            assert!(result.unwrap_err().to_string().contains("Announcements"));
+            assert!(store.read(guild).unwrap().publications.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn legacy_pending_is_not_cleared_by_existing_message_and_requires_attested_rejection() {
+    use discord_server_bot::services::publication_state as journal;
+    let dir = fixture();
+    let store = Store::open(dir.path().join("data")).unwrap();
+    let guild = s::GuildId::new(1);
+    let mut state = State {
+        pending: Some("links:123".into()),
+        ..Default::default()
+    };
+    state.publications.insert(
+        "links".into(),
+        Publication {
+            channel: s::ChannelId::new(11),
+            message: s::MessageId::new(100),
+        },
+    );
+    store.write(guild, &state).unwrap();
+    let (http, server) = mock_discord(vec![
+        journal_channel(),
+        (200, message(9)),
+        journal_channel(),
+        (200, message(9)),
+    ]);
+    assert!(
+        journal::ensure_ready(&store, guild, s::UserId::new(9), &http)
+            .await
+            .is_err()
+    );
+    assert_eq!(store.read(guild).unwrap().pending, state.pending);
+    assert!(
+        journal::attest_rejection(
+            &store,
+            &mut state,
+            guild,
+            s::UserId::new(9),
+            &http,
+            "links:WRONG",
+            journal::Rejection {
+                http_status: 403,
+                discord_code: 50080
+            }
+        )
+        .await
+        .is_err()
+    );
+    journal::attest_rejection(
+        &store,
+        &mut state,
+        guild,
+        s::UserId::new(9),
+        &http,
+        "links:123",
+        journal::Rejection {
+            http_status: 403,
+            discord_code: 50080,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(state.pending.is_none());
+    assert_eq!(state.publications["links"].message.get(), 100);
+    assert_eq!(state.publication_history[0].pending, "links:123");
+    assert_eq!(server.join().unwrap().len(), 4);
+    assert!(
+        store
+            .read(s::GuildId::new(2))
+            .unwrap()
+            .publication_history
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn durable_rejection_is_reconciled_but_foreign_or_inconsistent_journals_are_not() {
+    use discord_server_bot::services::publication_state as journal;
+    for invalid in [false, true] {
+        let dir = fixture();
+        let store = Store::open(dir.path().join("data")).unwrap();
+        let guild = s::GuildId::new(1);
+        let mut pending = journal_draft("announcements", journal::Write::Create);
+        pending.rejected = Some(journal::Rejection {
+            http_status: 400,
+            discord_code: 50035,
+        });
+        if invalid {
+            pending.guild = s::GuildId::new(2);
+        }
+        let mut state = State {
+            pending: Some("announcement-123:123".into()),
+            pending_operation: Some(pending),
+            ..Default::default()
+        };
+        store.write(guild, &state).unwrap();
+        let http = s::Http::new("TEST_TOKEN");
+        let result = journal::ensure_ready(&store, guild, s::UserId::new(9), &http).await;
+        assert_eq!(result.is_err(), invalid);
+        state = store.read(guild).unwrap();
+        assert_eq!(state.pending.is_some(), invalid);
+    }
+}
+
+#[tokio::test]
+async fn diagnostics_distinguish_unsupported_stickers_and_redact_free_form_api_details() {
+    use discord_server_bot::core::diagnostics;
+    let message = diagnostics::http_message(403, 50080);
+    assert!(message.contains("50080"));
+    assert!(message.contains("stickers"));
+    assert_ne!(message, diagnostics::http_message(403, 50013));
+    let (http,server)=mock_discord(vec![(400,r#"{"code":50035,"message":"secret https://private.example/?token=secret","errors":{"embeds":{"0":{"description":{"_errors":[{"code":"BASE_TYPE_MAX_LENGTH","message":"secret data"}]}}}}}"#.into())]);
+    let error = s::ChannelId::new(11)
+        .message(&http, s::MessageId::new(100))
+        .await
+        .unwrap_err();
+    let safe = diagnostics::sanitized_http_response(&error).to_string();
+    assert!(!safe.contains("secret") && !safe.contains("private.example"));
+    assert!(safe.contains("BASE_TYPE_MAX_LENGTH"));
+    assert!(safe.contains("embeds.0.description"));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn announcement_timeout_after_post_keeps_journal_and_never_reposts() {
+    use discord_server_bot::services::publication_state as journal;
+    let dir = fixture();
+    let config = config::load(dir.path()).unwrap();
+    let catalog = Catalog::new(&config);
+    let store = Store::open(dir.path().join("data")).unwrap();
+    let guild = s::GuildId::new(1);
+    let (base, server) = mock_discord(vec![
+        (200, announcement_guild("Guild", None)),
+        (200, "SIMULATE_TIMEOUT_AFTER_RECEIVING".into()),
+    ]);
+    let http = s::HttpBuilder::new("TEST_TOKEN")
+        .proxy(base.proxy.clone().unwrap())
+        .ratelimiter_disabled(true)
+        .client(
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_millis(100))
+                .build()
+                .unwrap(),
+        )
+        .build();
+    let plan = Plan {
+        operation: 123,
+        kind: "announcements",
+        action: "create".into(),
+        key: "announcement-123".into(),
+        document: Document {
+            title: "Test".into(),
+            description: "Body".into(),
+            ..Default::default()
+        },
+        channel: s::ChannelId::new(11),
+        revision: 0,
+        content_revision: Some(0),
+        delete: false,
+    };
+    let error = publishing::execute(&store, &catalog, guild, s::UserId::new(9), &http, &plan)
+        .await
+        .unwrap_err();
+    assert!(journal::rejection(&error).is_none());
+    let saved = store.read(guild).unwrap();
+    assert!(saved.pending.is_some());
+    assert!(saved.pending_operation.is_some());
+    assert!(saved.publications.is_empty());
+    let calls = server.join().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1].1["nonce"], "123");
+    assert_eq!(calls[1].1["enforce_nonce"], true);
+    let (lookup, read_server) = mock_discord(vec![journal_channel(), (200, "[]".into())]);
+    assert!(
+        journal::ensure_ready(&store, guild, s::UserId::new(9), &lookup)
+            .await
+            .is_err()
+    );
+    assert!(read_server.join().unwrap()[0].0.starts_with("GET "));
+    assert_eq!(store.read(guild).unwrap().pending, saved.pending);
+}
+
+#[tokio::test]
+async fn announcement_rejected_create_archives_failure_and_preserves_other_publications() {
+    let dir = fixture();
+    let config = config::load(dir.path()).unwrap();
+    let catalog = Catalog::new(&config);
+    let store = Store::open(dir.path().join("data")).unwrap();
+    let guild = s::GuildId::new(1);
+    let mut state = State::default();
+    state.publications.insert(
+        "links:test".into(),
+        Publication {
+            channel: s::ChannelId::new(11),
+            message: s::MessageId::new(100),
+        },
+    );
+    store.write(guild, &state).unwrap();
+    let (http, server) = mock_discord(vec![
+        (200, announcement_guild("Guild", None)),
+        (
+            403,
+            r#"{"code":50013,"message":"Missing Permissions"}"#.into(),
+        ),
+    ]);
+    let plan = Plan {
+        operation: 123,
+        kind: "announcements",
+        action: "create".into(),
+        key: "announcement-123".into(),
+        document: Document {
+            title: "Test".into(),
+            description: "Body".into(),
+            ..Default::default()
+        },
+        channel: s::ChannelId::new(11),
+        revision: 0,
+        content_revision: Some(0),
+        delete: false,
+    };
+    assert!(
+        publishing::execute(&store, &catalog, guild, s::UserId::new(9), &http, &plan)
+            .await
+            .is_err()
+    );
+    let state = store.read(guild).unwrap();
+    assert!(state.pending.is_none());
+    assert_eq!(state.publications["links:test"].message.get(), 100);
+    assert!(!state.publications.contains_key("announcement-123"));
+    assert_eq!(
+        state.publication_history[0].rejection.unwrap().discord_code,
+        50013
+    );
+    server.join().unwrap();
 }
 fn announcement_guild(name: &str, icon: Option<&str>) -> String {
     serde_json::json!({
@@ -1902,7 +2555,13 @@ async fn v1_to_v2_migration_is_one_patch_and_failures_never_lose_original_public
         assert_eq!(after.publications[&plan.key].message.get(), 100);
         assert_eq!(after.documents["unrelated"].title, "Preserve me");
         assert!(after.archived_publications.is_empty());
-        assert_eq!(after.pending.is_some(), fail);
+        assert!(after.pending.is_none());
+        if fail {
+            assert_eq!(
+                after.publication_history.last().unwrap().outcome,
+                "http_rejected"
+            );
+        }
         assert!(
             store
                 .read(s::GuildId::new(2))

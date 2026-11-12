@@ -229,20 +229,68 @@ async fn publish(
     icon: Option<String>,
 ) -> Result<(), Error> {
     let cfg = permissions::guild_config(ctx)?;
+    let bot = ctx.serenity_context().cache.current_user().id;
+    crate::services::publication_state::ensure_ready(
+        &ctx.data().store,
+        cfg.guild_id,
+        bot,
+        ctx.http(),
+    )
+    .await?;
     let state_revision = {
         let _guard = ctx.data().store.gate.lock().await;
         let state = ctx.data().store.read(cfg.guild_id)?;
         ensure!(
             state.pending.is_none(),
-            "Há operação pendente; reconcilie antes de publicar"
+            "{}",
+            crate::services::publication_state::describe(&state)
         );
         state.revision
+    };
+    let publication = {
+        let _guard = ctx.data().store.gate.lock().await;
+        ctx.data()
+            .store
+            .read(cfg.guild_id)?
+            .publications
+            .get(&board.publication_key())
+            .cloned()
+    };
+    let replacement = if let Some(publication) = publication {
+        match components_v2::get(ctx.http(), publication.channel, publication.message).await {
+            Ok(message) => {
+                ensure!(
+                    message.author.id == ctx.serenity_context().cache.current_user().id
+                        && message.guild_id.is_none_or(|g| g == cfg.guild_id),
+                    "Mensagem original de outra autoria/guilda"
+                );
+                message.needs_replacement()
+            }
+            Err(error)
+                if matches!(
+                    crate::services::publication_state::rejection(&error),
+                    Some(crate::services::publication_state::Rejection {
+                        http_status: 404,
+                        discord_code: 10008
+                    })
+                ) =>
+            {
+                false
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        false
     };
     let original = board.document();
     let Some(displayed) = show(
         ctx,
         service::with_guild_icon(original.clone(), icon),
-        Some("Publicar"),
+        Some(if replacement {
+            "Substituir publicação"
+        } else {
+            "Publicar"
+        }),
         true,
     )
     .await?
@@ -286,7 +334,12 @@ async fn publish(
         content_revision: Some(memory_revision),
         delete: false,
     };
-    ctx.say(publishing::commit(ctx, &plan).await?).await?;
+    let result = if replacement {
+        publishing::commit_links_replacement(ctx, &plan).await?
+    } else {
+        publishing::commit(ctx, &plan).await?
+    };
+    ctx.say(result).await?;
     Ok(())
 }
 
@@ -319,6 +372,9 @@ async fn show(
         let mut payload = components_v2::build(&doc, &copy, buttons)?;
         if accept == Some("Publicar") {
             payload = payload.notice("Prévia privada. Publicar cria ou atualiza a mensagem original. Mensagens V1 serão convertidas para Components V2; essa conversão é irreversível nessa mensagem. Cancelar não altera a publicação.")?;
+        }
+        if accept == Some("Substituir publicação") {
+            payload = payload.notice("A mensagem original contém stickers não editáveis. Confirmar cria uma nova publicação V2, registra seu novo ID somente após sucesso e preserva a mensagem anterior e sua referência arquivada. Cancelar não altera nenhuma publicação.")?;
         }
         let message = components_v2::preview(ctx, &payload).await?;
         if !interactive {

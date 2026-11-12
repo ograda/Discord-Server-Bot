@@ -159,6 +159,34 @@ pub(crate) async fn commit(ctx: Context<'_>, plan: &Plan) -> Result<String, Erro
     )
     .await
 }
+pub(crate) async fn commit_links_replacement(
+    ctx: Context<'_>,
+    plan: &Plan,
+) -> Result<String, Error> {
+    ensure!(
+        plan.kind == "links" && plan.action == "publish",
+        "Substituição restrita a Links Publish confirmado"
+    );
+    permissions::action(ctx, "links", "publish")?;
+    let target = authorize_channel(ctx, "links", plan.channel, true).await?;
+    let auth = permissions::administrative(ctx, s::Permissions::MANAGE_MESSAGES).await?;
+    permissions::ensure_bot_channel_permissions(
+        &auth,
+        &target,
+        s::Permissions::READ_MESSAGE_HISTORY,
+    )?;
+    let bot = ctx.serenity_context().cache.current_user().id;
+    super::components_v2::publish_mode(
+        &ctx.data().store,
+        &ctx.data().catalog,
+        auth.guild.id,
+        bot,
+        ctx.http(),
+        plan,
+        true,
+    )
+    .await
+}
 async fn commit_request(ctx: Context<'_>, request: Request<'_>) -> Result<String, Error> {
     let plan = request.plan;
     let cfg = permissions::guild_config(ctx)?;
@@ -236,6 +264,10 @@ pub async fn execute_request(
     if plan.kind == "links" {
         return super::components_v2::publish(store, catalog, guild, bot, http, plan).await;
     }
+    let journaled = plan.kind == "announcements";
+    if journaled {
+        super::publication_state::ensure_ready(store, guild, bot, http).await?;
+    }
     let mut embeds = if plan.kind == "announcements" {
         vec![]
     } else {
@@ -249,7 +281,8 @@ pub async fn execute_request(
     );
     ensure!(
         state.pending.is_none(),
-        "Operação pendente com resultado incerto; confira o canal e o estado antes de repetir"
+        "{}",
+        super::publication_state::describe(&state)
     );
     if let Some(revision) = plan.content_revision {
         ensure!(
@@ -297,6 +330,9 @@ pub async fn execute_request(
             Err(s::Error::Http(s::HttpError::UnsuccessfulRequest(response)))
                 if response.status_code.as_u16() == 404 =>
             {
+                if plan.kind == "announcements" && response.error.code != 10008 {
+                    return Err(s::Error::Http(s::HttpError::UnsuccessfulRequest(response)).into());
+                }
                 ensure!(
                     plan.delete,
                     "Mensagem original não encontrada (404). IDs preservados; use Remove para reconciliar antes de uma nova publicação"
@@ -329,67 +365,122 @@ pub async fn execute_request(
         None
     };
     let document = announcement.as_ref().unwrap_or(&plan.document);
-    state.pending = Some(format!("{}:{}", plan.key, plan.operation));
-    store.write(guild, &state)?;
-    tracing::info!(%guild, module = plan.kind, action = plan.action, stage = "http", channel = %plan.channel, "Aplicando publicação confirmada");
-    // Keep pending on uncertain HTTP outcomes. A second click cannot repeat this transaction.
-    if plan.delete {
-        let publication = existing.context("Publicação inexistente")?;
-        if !missing {
-            match plan.channel.delete_message(http, publication.message).await {
-                Ok(()) => (),
-                Err(s::Error::Http(s::HttpError::UnsuccessfulRequest(response)))
-                    if response.status_code.as_u16() == 404 => {}
-                Err(error) => return Err(error.into()),
-            }
-        }
-        state.publications.remove(&plan.key);
-        if plan.kind == "announcements" {
-            state.documents.remove(&plan.key);
-            state.announcement_images.remove(&plan.key);
-        }
+    if journaled {
+        use super::publication_state::{self as journal, Write};
+        journal::begin(
+            store,
+            &mut state,
+            journal::Pending {
+                guild,
+                operation: plan.operation,
+                key: plan.key.clone(),
+                module: plan.kind.into(),
+                action: plan.action.clone(),
+                channel: plan.channel,
+                write: if plan.delete {
+                    Write::Delete
+                } else if existing.is_some() && !missing {
+                    Write::Edit
+                } else {
+                    Write::Create
+                },
+                previous: existing.clone(),
+                confirmed_message: None,
+                rejected: None,
+                expected: serde_json::json!({"content":document.text, "embeds":embeds}),
+                document: Some(document.clone()),
+                invite: None,
+            },
+        )?;
     } else {
-        let message = if let Some(publication) = existing.filter(|_| !missing) {
-            let mut edit = s::EditMessage::new()
-                .content(&document.text)
-                .embeds(embeds)
-                .allowed_mentions(s::CreateAllowedMentions::new());
-            if let Some(attachments) = attachments {
-                edit = edit.attachments(attachments);
-            }
-            plan.channel
-                .edit_message(http, publication.message, edit)
-                .await?
-        } else {
-            let mut create = s::CreateMessage::new()
-                .content(&document.text)
-                .embeds(embeds)
-                .allowed_mentions(s::CreateAllowedMentions::new());
-            if plan.kind == "announcements" {
-                for file in request.image.files() {
-                    create = create.add_file(file);
+        state.pending = Some(format!("{}:{}", plan.key, plan.operation));
+        store.write(guild, &state)?;
+    }
+    tracing::info!(%guild, module = plan.kind, action = plan.action, operation=plan.operation, key=plan.key, stage = "http", channel = %plan.channel, "Aplicando publicação confirmada");
+    // Keep pending on uncertain HTTP outcomes. A second click cannot repeat this transaction.
+    let result: Result<(), Error> = async {
+        if plan.delete {
+            let publication = existing.context("Publicação inexistente")?;
+            if !missing {
+                match plan.channel.delete_message(http, publication.message).await {
+                    Ok(()) => (),
+                    Err(s::Error::Http(s::HttpError::UnsuccessfulRequest(response)))
+                        if response.status_code.as_u16() == 404
+                            && (plan.kind != "announcements" || response.error.code == 10008) => {}
+                    Err(error) => return Err(error.into()),
                 }
             }
-            plan.channel.send_message(http, create).await?
-        };
-        state.publications.insert(
-            plan.key.clone(),
-            Publication {
-                channel: plan.channel,
-                message: message.id,
-            },
-        );
-        if plan.kind == "announcements" {
-            if let Some(image) = media::published(document, &message)? {
-                state.announcement_images.insert(plan.key.clone(), image);
-            } else {
+            state.publications.remove(&plan.key);
+            if plan.kind == "announcements" {
+                state.documents.remove(&plan.key);
                 state.announcement_images.remove(&plan.key);
             }
-            state.documents.insert(plan.key.clone(), document.clone());
+        } else {
+            let message = if let Some(publication) = existing.filter(|_| !missing) {
+                let mut edit = s::EditMessage::new()
+                    .content(&document.text)
+                    .embeds(embeds)
+                    .allowed_mentions(s::CreateAllowedMentions::new());
+                if let Some(attachments) = attachments {
+                    edit = edit.attachments(attachments);
+                }
+                plan.channel
+                    .edit_message(http, publication.message, edit)
+                    .await?
+            } else {
+                let mut create = s::CreateMessage::new()
+                    .content(&document.text)
+                    .embeds(embeds)
+                    .allowed_mentions(s::CreateAllowedMentions::new());
+                if plan.kind == "announcements" {
+                    create = create
+                        .nonce(s::Nonce::String(plan.operation.to_string()))
+                        .enforce_nonce(true);
+                    for file in request.image.files() {
+                        create = create.add_file(file);
+                    }
+                }
+                plan.channel.send_message(http, create).await?
+            };
+            if journaled {
+                super::publication_state::received(store, &mut state, guild, message.id)?;
+            }
+            state.publications.insert(
+                plan.key.clone(),
+                Publication {
+                    channel: plan.channel,
+                    message: message.id,
+                },
+            );
+            if plan.kind == "announcements" {
+                if let Some(image) = media::published(document, &message)? {
+                    state.announcement_images.insert(plan.key.clone(), image);
+                } else {
+                    state.announcement_images.remove(&plan.key);
+                }
+                state.documents.insert(plan.key.clone(), document.clone());
+            }
         }
+        Ok(())
     }
-    state.pending = None;
-    state.revision += 1;
+    .await;
+    if let Err(error) = result {
+        if let Some(http_error) = error.downcast_ref::<s::Error>() {
+            tracing::warn!(%guild, module=plan.kind, action=plan.action, stage="publication_write", response=%crate::core::diagnostics::sanitized_http_response(http_error), "Falha HTTP da publicação; dados livres removidos");
+        }
+        return Err(if journaled {
+            super::publication_state::failed(store, &mut state, guild, error)
+        } else {
+            error
+        });
+    }
+    if journaled {
+        let publication = state.publications.get(&plan.key).cloned();
+        super::publication_state::finish(&mut state, guild, "confirmed", publication, None)?;
+    } else {
+        state.pending = None;
+        state.revision += 1;
+    }
     store.write(guild, &state)?;
     if plan.delete {
         Ok(format!(

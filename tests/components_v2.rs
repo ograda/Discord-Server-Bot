@@ -151,7 +151,7 @@ fn legacy_conversion_clears_only_disallowed_fields_and_preserves_attachment_refe
     assert_eq!(payload["flags"], IS_COMPONENTS_V2 | 4);
     assert!(payload["content"].is_null() && payload["poll"].is_null());
     assert_eq!(payload["embeds"], json!([]));
-    assert_eq!(payload["sticker_ids"], json!([]));
+    assert!(payload.get("sticker_ids").is_none());
     assert_eq!(
         payload["attachments"],
         json!([{"id":"201","filename":"legacy.png"}])

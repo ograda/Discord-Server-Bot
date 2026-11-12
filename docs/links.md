@@ -164,13 +164,21 @@ homologação de Gateway, modals e aparência real é realizada separadamente.
 
 Preview não modifica mensagens públicas. Publish informa a conversão irreversível
 na confirmação e utiliza PATCH na mesma mensagem, mantendo o Message ID. O payload
-ativa IS_COMPONENTS_V2, limpa content/poll com null e embeds/sticker_ids com arrays
-vazios; conserva os anexos existentes. Isso é permitido pelo endpoint oficial de
+ativa IS_COMPONENTS_V2, limpa content/poll com null e embeds com array vazio
+somente na conversão; conserva os anexos existentes. **Não envia sticker_ids**:
+stickers não são editáveis, nem mesmo enviando um array vazio. Veja o endpoint de
 [edição de mensagem](https://docs.discord.com/developers/resources/message#edit-message).
-Não há DELETE/POST ou duplicação durante essa conversão. Mensagens já V2 também
-são atualizadas por PATCH. Campos JSON de outros módulos permanecem intactos.
+Não há DELETE/POST durante essa conversão de uma mensagem sem stickers.
+Mensagens já V2 também são atualizadas por PATCH, sem campos legados.
+Campos JSON de outros módulos permanecem intactos. Se a mensagem contém stickers,
+a prévia oferece **Substituir publicação**, com confirmação explícita: cria a nova,
+registra o ID somente após sucesso e preserva a mensagem original no canal e sua
+referência arquivada. Cancelar/falhar não elimina a original.
 
-Falha deixa referências/pending preservados e não cria outra mensagem. A flag não
+Falha de resultado incerto deixa referências/pending preservados e não repete a
+publicação. Rejeições HTTP definitivas são registradas no histórico e não deixam
+pending bloqueando a guilda. Veja [reconciliação](publication-reconciliation.md).
+A flag não
 pode ser removida dessa mensagem; voltar ao executável V1 não desfaz a conversão.
 O caso distinto de mensagem já apagada continua usando recuperação por 404/10008
 após confirmação, arquivando o ID anterior. Veja [implantação](deployment-v2.md)

@@ -169,7 +169,8 @@ lê flags e referências, sem reconstruir V2 em builders legados.
 Publish mantém as revisões do catálogo/JSON e o journal pending. Uma publicação
 V1 é convertida por um PATCH confirmado, limpando os campos legados e mantendo
 ID/anexos. Não há DELETE/POST na conversão. A flag é irreversível nessa mensagem;
-falhas preservam referências e pendência. Somente a recuperação já existente
+falhas incertas preservam referências e pendência. Rejeições definitivas são
+arquivadas e liberam o bloqueio, sem remover publicações. Somente a recuperação já existente
 de mensagem apagada (404/10008) permite substituição e arquiva o ID anterior.
 
 A Activity é um build estático em `activities/invite`. A configuração opcional
@@ -182,3 +183,31 @@ O SDK aguarda ready e chama openInviteDialog após clique em guilda/canal.
 Não há novo backend, banco, Gateway, serviço de upload ou processo Node de produção.
 Veja [Activity](activity-invite.md), [implantação](deployment-v2.md) e
 [homologação](validation-v2.md).
+
+## Journal de publicações e reconciliação
+
+Links e Announcements mantêm `pending` compatível com a V1 e acrescentam
+`pending_operation` opcional: guilda, ação, tipo de escrita, canal, publicação
+anterior, payload esperado temporário, nonce e recibo do Message ID. Um recibo
+é gravado antes de finalizar documentos/imagens. O histórico de conclusões
+guarda identificadores e evidências, sem duplicar permanentemente os conteúdos
+de Links/TOML. As imagens continuam fora do JSON binário/Base64.
+
+Rejeições HTTP 4xx explícitas e conhecidas são gravadas antes de finalizar o
+journal como rejeitado. 408/409/425/429, 5xx, timeout, resposta malformada e falha
+local posterior ao envio permanecem pendentes. Não há reenvio cego. POST usa
+nonce da operação com enforce_nonce; a reconciliação não faz POST.
+
+Antes de abrir Links Publish/Announcement, a reconciliação pode reconhecer um
+recibo ou um alvo conhecido cujo conteúdo corresponda ao payload esperado. Para
+POST sem recibo, somente correspondência positiva de nonce e conteúdo permite
+recuperar a mensagem. Busca vazia/incompleta é inconclusiva. O canal é conferido
+pela API contra o Guild ID; autoria, alvo e conteúdo também são validados.
+Registros legados não recebem ação/resultado inventados. Conclusões de
+reconciliação criam backup e histórico, sob o mutex e lock exclusivos existentes.
+
+`reconcile-publication` é uma ferramenta local de manutenção desse journal,
+sem novas raízes slash nem escritas no Discord. O operador pode inspecionar,
+aplicar evidência conclusiva, indicar um Message ID fora da busca recente ou
+atestar uma rejeição comprovada pelos logs, confirmando exatamente o pending.
+Veja [procedimento e limitações](publication-reconciliation.md).

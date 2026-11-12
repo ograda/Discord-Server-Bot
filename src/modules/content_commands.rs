@@ -338,6 +338,14 @@ pub async fn announcement(
     permissions::conditional_parameters("announcement", &action, &supplied)?;
     permissions::action(ctx, "announcement", &action)?;
     permissions::administrative(ctx, s::Permissions::MANAGE_MESSAGES).await?;
+    let bot = ctx.serenity_context().cache.current_user().id;
+    crate::services::publication_state::ensure_ready(
+        &ctx.data().store,
+        cfg.guild_id,
+        bot,
+        ctx.http(),
+    )
+    .await?;
     // Interaction attachment URLs can expire while an administrator fills the modal.
     let upload = if let Some(attachment) = imagem.as_ref() {
         media::check_input(imagem_acao, true, url_imagem.as_deref())?;

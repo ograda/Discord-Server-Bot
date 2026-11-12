@@ -164,6 +164,8 @@ pub fn build(doc: &Document, copy_id: &str, controls: Vec<s::CreateButton>) -> R
         flags: IS_COMPONENTS_V2,
         components: vec![root],
         allowed_mentions: s::CreateAllowedMentions::new(),
+        nonce: None,
+        enforce_nonce: None,
     })
 }
 
@@ -172,8 +174,17 @@ pub struct Message {
     pub flags: u64,
     pub components: Vec<Component>,
     allowed_mentions: s::CreateAllowedMentions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nonce: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enforce_nonce: Option<bool>,
 }
 impl Message {
+    pub fn for_operation(mut self, operation: u64) -> Self {
+        self.nonce = Some(operation.to_string());
+        self.enforce_nonce = Some(true);
+        self
+    }
     pub fn ephemeral(mut self) -> Self {
         self.flags |= 64;
         self
@@ -197,10 +208,11 @@ impl Message {
     pub fn edit_payload(&self, original: &RemoteMessage) -> Value {
         let mut payload = serde_json::to_value(self).expect("typed Components V2 payload");
         payload["flags"] = json!(IS_COMPONENTS_V2 | (original.flags & 4));
-        payload["content"] = Value::Null;
-        payload["embeds"] = json!([]);
-        payload["sticker_ids"] = json!([]);
-        payload["poll"] = Value::Null;
+        if !original.is_v2() {
+            payload["content"] = Value::Null;
+            payload["embeds"] = json!([]);
+            payload["poll"] = Value::Null;
+        }
         payload["attachments"] = json!(
             original
                 .attachments
@@ -212,7 +224,7 @@ impl Message {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RemoteMessage {
     pub id: s::MessageId,
     pub channel_id: s::ChannelId,
@@ -223,6 +235,16 @@ pub struct RemoteMessage {
     pub flags: u64,
     #[serde(default)]
     pub attachments: Vec<s::Attachment>,
+    #[serde(default, rename = "type")]
+    pub kind: u8,
+    #[serde(default)]
+    pub sticker_items: Vec<Value>,
+    #[serde(default)]
+    pub stickers: Vec<Value>,
+    #[serde(default)]
+    pub embeds: Vec<Value>,
+    #[serde(default)]
+    pub components: Vec<Value>,
 }
 fn flags_or_zero<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -230,9 +252,16 @@ fn flags_or_zero<'de, D: serde::Deserializer<'de>>(
     Ok(Option::<u64>::deserialize(deserializer)?.unwrap_or_default())
 }
 impl RemoteMessage {
+    pub fn needs_replacement(&self) -> bool {
+        !self.sticker_items.is_empty() || !self.stickers.is_empty()
+    }
     pub fn is_v2(&self) -> bool {
         self.flags & IS_COMPONENTS_V2 != 0
     }
+}
+
+pub fn diagnose(guild: s::GuildId, channel: s::ChannelId, message: &Value, fields: &[String]) {
+    tracing::info!(%guild, %channel, message=?message["id"].as_str(), message_type=?message["type"].as_u64(), flags=message["flags"].as_u64().unwrap_or_default(), stickers=message["sticker_items"].as_array().map_or(0, Vec::len), legacy_stickers=message["stickers"].as_array().map_or(0, Vec::len), attachments=message["attachments"].as_array().map_or(0, Vec::len), embeds=message["embeds"].as_array().map_or(0, Vec::len), components=message["components"].as_array().map_or(0, Vec::len), components_v2=message["flags"].as_u64().unwrap_or_default() & IS_COMPONENTS_V2 != 0, edit_fields=?fields, module="links", stage="original_message", "Metadados da publicação; conteúdo omitido");
 }
 
 pub async fn request<T: serde::de::DeserializeOwned>(
@@ -264,6 +293,7 @@ pub async fn request<T: serde::de::DeserializeOwned>(
                 stage,
                 http_status = status,
                 discord_code = code,
+                response = %crate::core::diagnostics::sanitized_http_response(&error),
                 "Falha no transporte Components V2; payload e URL omitidos"
             );
             Err(error.into())
@@ -287,6 +317,9 @@ pub async fn get(
     )
     .await
 }
+pub async fn private_admin_identity(http: &s::Http) -> Result<s::UserId> {
+    Ok(private_http(http.get_current_user()).await?.id)
+}
 pub async fn create(
     http: &s::Http,
     channel: s::ChannelId,
@@ -308,6 +341,10 @@ pub async fn edit(
     original: &RemoteMessage,
     payload: &Message,
 ) -> Result<RemoteMessage> {
+    ensure!(
+        !original.needs_replacement(),
+        "Mensagem contém stickers que não podem ser editados/removidos. Original preservada; confirme a substituição na próxima prévia de Publish"
+    );
     request(
         http,
         s::http::Route::ChannelMessage {
@@ -330,7 +367,20 @@ pub async fn publish(
     http: &s::Http,
     plan: &super::publishing::Plan,
 ) -> Result<String> {
-    use super::storage::{ArchivedPublication, Publication};
+    publish_mode(store, catalog, guild, bot, http, plan, false).await
+}
+
+pub async fn publish_mode(
+    store: &super::storage::Store,
+    catalog: &super::catalog::Catalog,
+    guild: s::GuildId,
+    bot: s::UserId,
+    http: &s::Http,
+    plan: &super::publishing::Plan,
+    replace: bool,
+) -> Result<String> {
+    use super::publication_state as journal;
+    use super::storage::Publication;
     use anyhow::Context as _;
     let invite = super::links::published_invite(&plan.document, plan.operation)?;
     let payload = build(
@@ -338,16 +388,14 @@ pub async fn publish(
         invite.as_ref().map_or("", |i| i.custom_id.as_str()),
         vec![],
     )?;
+    journal::ensure_ready(store, guild, bot, http).await?;
     let _guard = store.gate.lock().await;
     let mut state = store.read(guild)?;
     ensure!(
         state.revision == plan.revision,
         "Estado alterado por outra operação; abra uma nova prévia"
     );
-    ensure!(
-        state.pending.is_none(),
-        "Operação pendente com resultado incerto; confira o canal e o estado antes de repetir"
-    );
+    ensure!(state.pending.is_none(), "{}", journal::describe(&state));
     if let Some(revision) = plan.content_revision {
         ensure!(
             catalog.snapshot(guild).await?.revision == revision,
@@ -385,43 +433,106 @@ pub async fn publish(
                     return Err(error);
                 }
                 missing = true;
-                if !plan.delete {
-                    state.archived_publications.push(ArchivedPublication {
-                        key: plan.key.clone(),
-                        publication: publication.clone(),
-                        revision: state.revision,
-                    });
-                }
             }
         }
     }
-    state.pending = Some(format!("{}:{}", plan.key, plan.operation));
-    store.write(guild, &state)?;
+    if let Some(original) = &original {
+        let fields = payload
+            .edit_payload(original)
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        diagnose(
+            guild,
+            plan.channel,
+            &serde_json::to_value(original)?,
+            &fields,
+        );
+        ensure!(
+            plan.delete || !original.needs_replacement() || replace,
+            "Mensagem contém stickers não editáveis; original preservada. Abra Publish novamente para confirmar uma substituição segura"
+        );
+    }
+    ensure!(
+        !replace
+            || (!plan.delete
+                && original
+                    .as_ref()
+                    .is_some_and(RemoteMessage::needs_replacement)),
+        "Substituição recusada: mensagem recuperada não exige substituição; abra nova prévia"
+    );
+    let write = if plan.delete {
+        journal::Write::Delete
+    } else if replace {
+        journal::Write::Replace
+    } else if original.is_some() {
+        journal::Write::Edit
+    } else {
+        journal::Write::Create
+    };
+    tracing::info!(%guild, channel=%plan.channel, operation=plan.operation, key=plan.key, action=plan.action, ?write, module="links", stage="publication_write", "Aplicando publicação confirmada; journal persistido antes da escrita remota");
+    journal::begin(
+        store,
+        &mut state,
+        journal::Pending {
+            guild,
+            operation: plan.operation,
+            key: plan.key.clone(),
+            module: "links".into(),
+            action: plan.action.clone(),
+            channel: plan.channel,
+            write,
+            previous: existing.clone(),
+            confirmed_message: None,
+            rejected: None,
+            expected: serde_json::to_value(&payload)?,
+            document: None,
+            invite: invite.clone(),
+        },
+    )?;
     if plan.delete {
         if let Some(original) = original {
             match plan.channel.delete_message(http, original.id).await {
                 Ok(()) => (),
                 Err(s::Error::Http(s::HttpError::UnsuccessfulRequest(r)))
                     if r.status_code.as_u16() == 404 && r.error.code == 10008 => {}
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(journal::failed(store, &mut state, guild, error.into())),
             }
         }
         state.publications.remove(&plan.key);
         state.link_invites.remove(&plan.key);
     } else {
-        let message = match original {
-            Some(original) => edit(http, plan.channel, &original, &payload).await?,
-            None => create(http, plan.channel, &payload).await?,
+        let result = match original.filter(|_| !replace) {
+            Some(original) => edit(http, plan.channel, &original, &payload).await,
+            None => create(http, plan.channel, &payload.for_operation(plan.operation)).await,
         };
+        let message = match result {
+            Ok(message) => message,
+            Err(error) => return Err(journal::failed(store, &mut state, guild, error)),
+        };
+        journal::received(store, &mut state, guild, message.id)?;
         ensure!(
             message.channel_id == plan.channel && message.author.id == bot,
             "Resposta de publicação inesperada; operação pendente preservada"
         );
         if let Some(publication) = &existing {
             ensure!(
-                missing || publication.message == message.id,
+                missing || replace || publication.message == message.id,
                 "Discord retornou outro Message ID ao editar; referências preservadas"
             );
+        }
+        if (replace || missing)
+            && let Some(previous) = &existing
+        {
+            state
+                .archived_publications
+                .push(super::storage::ArchivedPublication {
+                    key: plan.key.clone(),
+                    publication: previous.clone(),
+                    revision: state.revision,
+                });
         }
         state.publications.insert(
             plan.key.clone(),
@@ -436,8 +547,8 @@ pub async fn publish(
             state.link_invites.remove(&plan.key);
         }
     }
-    state.pending = None;
-    state.revision += 1;
+    let publication = state.publications.get(&plan.key).cloned();
+    journal::finish(&mut state, guild, "confirmed", publication, None)?;
     store.write(guild, &state)?;
     if plan.delete {
         return Ok(format!(
@@ -449,7 +560,9 @@ pub async fn publish(
         .publications
         .get(&plan.key)
         .context("Publicação sem registro")?;
-    let recovery = if missing {
+    let recovery = if replace {
+        "Nova publicação V2 confirmada; referência anterior arquivada e mensagem original preservada no canal.\n"
+    } else if missing {
         "A mensagem anterior foi apagada. Uma nova publicação foi criada e o ID anterior foi arquivado.\n"
     } else {
         ""

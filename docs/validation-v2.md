@@ -1,5 +1,24 @@
 # Homologação V2 — Components V2 e Activity
 
+## Correção de publicações — 12/11/2026
+
+Executados em `target/reconciliation`: formatação, Clippy com `-D warnings`,
+155 testes Rust e compilação, todos aprovados; `docker compose config --quiet`
+também aprovado. O cache anterior de build apresentou artefatos rlib ausentes;
+a validação foi refeita em diretório isolado, sem apagar o cache ou executável
+em uso. Os 12 novos testes usam HTTP local, inclusive timeout após recebimento,
+recuperação por recibo/nonce e casos inconclusivos. Nenhuma credencial real nos testes.
+
+Investigação real, separada dos testes: GET da mensagem original retornou HTTP
+200, tipo 0, flags 0, zero stickers/anexos, um embed e um componente. Não houve
+PATCH/POST/DELETE real para homologação. O estado legado de Links bloqueava
+Announcements e foi preservado. A ferramenta sem `--apply` respeitou o lock da
+instância ativa e recusou abrir o armazenamento; nenhuma reconciliação real foi
+gravada. Pare a instância e siga [o procedimento seguro](publication-reconciliation.md).
+
+A homologação de Publish corrigido, substituição e fluxo de anúncio continua
+pendente no Discord. A Activity e os demais módulos não foram modificados.
+
 ## Validação local executada em 12/11/2026
 
 | Verificação | Resultado |

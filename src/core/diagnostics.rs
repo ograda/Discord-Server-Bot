@@ -48,9 +48,37 @@ pub fn http_message(status: u16, code: isize) -> String {
         50013 => format!(
             "Discord recusou por permissão insuficiente (HTTP {status}, código 50013). Confira as permissões do bot"
         ),
+        50080 => format!(
+            "Operação não suportada: o Discord não permite editar stickers de uma mensagem (HTTP {status}, código 50080). Não é uma falha genérica de permissão; publicação original preservada"
+        ),
+        50035 => format!(
+            "Requisição inválida ao Discord (HTTP {status}, código 50035). Confira os campos do payload; uma rejeição definitiva não deve deixar a guilda bloqueada"
+        ),
         _ => format!(
             "Discord recusou a operação: HTTP {status}, código {code}. Confira o resultado e o registro pending, quando aplicável, antes de repetir"
         ),
+    }
+}
+
+/// Complete parsed error structure, with free-form/private text and paths redacted.
+/// Keep the original typed error in the chain; never log request URLs/tokens.
+pub fn sanitized_http_response(error: &s::Error) -> serde_json::Value {
+    use serde_json::json;
+    match error {
+        s::Error::Http(s::HttpError::UnsuccessfulRequest(r)) => json!({
+            "http_status":r.status_code.as_u16(), "discord_code":r.error.code,
+            "method":r.method.as_str(), "route":discord_route(r.method.as_str(), &r.url),
+            "body": {"code":r.error.code, "message":match r.error.code {
+                50080 => "Cannot edit stickers within a message", 50035 => "Invalid Form Body",
+                50001 => "Missing Access", 50013 => "Missing Permissions", 10008 => "Unknown Message",
+                _ => "[free-form message redacted]"
+            }, "errors":r.error.errors.iter().map(|e| json!({
+                "code":if e.code.len() <= 128 && e.code.bytes().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_') {e.code.as_str()} else {"[redacted]"},
+                "path":e.path.split('.').map(|p| if ["content","components","embeds","attachments","flags","sticker_ids","poll","url","image","description","title","custom_id","label","type","accessory","media","items","filename"].contains(&p) || (p.len() <= 6 && p.bytes().all(|c| c.is_ascii_digit())) {p} else {"[redacted]"}).collect::<Vec<_>>().join("."),
+                "message":"[free-form message redacted]"
+            })).collect::<Vec<_>>()}
+        }),
+        _ => json!({"category":"transport_or_decode", "outcome":"unknown", "details":"[redacted]"}),
     }
 }
 
@@ -109,7 +137,14 @@ pub fn failure(ctx: Context<'_>, error: &anyhow::Error) -> String {
             _ => None,
         })
     });
-    let message = if let Some(interaction) = interaction {
+    let pending = error.downcast_ref::<crate::services::publication_state::Blocked>();
+    let message = if let Some(pending) = pending {
+        if let Some((status, code)) = http {
+            format!("{pending}\n{}", http_message(status, code))
+        } else {
+            pending.to_string()
+        }
+    } else if let Some(interaction) = interaction {
         interaction.to_string()
     } else if let Some((status, code)) = http {
         http_message(status, code)
@@ -129,7 +164,9 @@ pub fn failure(ctx: Context<'_>, error: &anyhow::Error) -> String {
             _ => None,
         })
     });
-    let stage = if interaction.is_some() {
+    let stage = if pending.is_some() {
+        "publication_reconciliation"
+    } else if interaction.is_some() {
         "interaction_response"
     } else if lower.contains("download") {
         "download"

@@ -18,6 +18,10 @@ Veja [Activity e configuração no Portal](docs/activity-invite.md),
 [homologação V2](docs/validation-v2.md). Ainda não há release estável 2.0 nem
 homologação real da Activity. Servidores maiores exigem elegibilidade oficial.
 
+Correção de publicações: PATCH de Links não envia `sticker_ids`; rejeições
+definitivas não deixam a guilda bloqueada. Resultados incertos usam journal e
+reconciliação conservadora. Veja [diagnóstico e recuperação de pending](docs/publication-reconciliation.md).
+
 Bot privado para administrar 2–3 servidores próprios, com código-fonte público.
 Monólito modular em Rust, desenvolvido no Windows e preparado para VPS Linux.
 O objetivo é evoluir administração, automações e integrações incrementalmente.

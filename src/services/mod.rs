@@ -5,6 +5,7 @@ pub mod components_v2;
 pub mod content;
 pub mod links;
 pub mod profile;
+pub mod publication_state;
 pub mod publishing;
 pub mod roles;
 pub mod storage;
