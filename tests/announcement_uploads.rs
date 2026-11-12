@@ -355,7 +355,7 @@ async fn bounded_download_reports_http_and_size_errors() {
         });
         let response = reqwest::get(url).await.unwrap();
         assert!(
-            media::read_response(response, limit)
+            discord_server_bot::services::attachments::read_response(response, limit)
                 .await
                 .unwrap_err()
                 .to_string()

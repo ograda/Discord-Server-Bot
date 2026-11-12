@@ -1,12 +1,12 @@
 title = "📜 Regras da Comunidade"
-description = "Bem-vindo! Nosso objetivo é manter um ambiente respeitoso, organizado e divertido para todos. Ao permanecer no servidor, você concorda com estas regras."
+description = "testeBem-vindo! Nosso objetivo é manter um ambiente respeitoso, organizado e divertido para todos. Ao permanecer no servidor, você concorda com estas regras.\n\n"
 color = 5793266
-footer = "ℹ️ Dúvidas? Procure a moderação.\n\nAproveite o servidor! TESTESTESTESTSTETS"
+footer = "\n\nℹ️ Dúvidas? Procure a moderação.\n\nAproveite o servidor! TXSS"
 
 [[entries]]
 id = "respeito"
 title = "Respeite os outros membros"
-description = "Trate todos com respeito, independentemente de experiência, habilidade, idade ou preferências."
+description = " teste Trate todos com respeito, independentemente de experiência, habilidade, idade ou preferências."
 emoji = "🤝"
 order = 1
 [[entries]]

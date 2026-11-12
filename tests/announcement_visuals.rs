@@ -119,11 +119,107 @@ fn admin_modal_has_only_title_content_color_and_main_image() {
     assert_eq!(
         labels,
         [
-            "Título",
+            "Título (opcional)",
             "Mensagem",
             "Cor hexadecimal (#5865F2)",
             "URL alternativa (opcional)"
         ]
+    );
+    assert_eq!(rows[0]["components"][0]["required"], false);
+}
+
+#[test]
+fn default_header_uses_the_current_discord_guild_name_and_preserves_identity_and_images() {
+    for current in [
+        guild(
+            1,
+            "Receita Federal",
+            Some("0123456789abcdef0123456789abcdef"),
+        ),
+        guild(2, "Comunidade São José", None),
+    ] {
+        for title in ["", " \n", "📢 Anúncio", "announcements"] {
+            for image in [
+                "https://example.org/banner.png",
+                "attachment://announcement-test.png",
+            ] {
+                let base = Document {
+                    title: title.into(),
+                    image: image.into(),
+                    ..legacy()
+                };
+                let rendered = announcements::for_guild(&base, &current).unwrap();
+                assert_eq!(
+                    rendered.title,
+                    format!(
+                        "📢 Comunicado oficial da administração da comunidade — {}",
+                        current.name
+                    )
+                );
+                assert_eq!(
+                    rendered.footer,
+                    format!(
+                        "Comunicado oficial • {} • Ograda Solutions Bot",
+                        current.name
+                    )
+                );
+                assert_eq!(rendered.thumbnail, current.icon_url().unwrap_or_default());
+                assert_eq!(rendered.image, image);
+                assert_eq!(rendered.color, base.color);
+                assert_eq!(rendered.description, base.description);
+                assert_eq!(base.title, title);
+            }
+        }
+    }
+}
+#[test]
+fn administrator_custom_headers_are_preserved_verbatim() {
+    let current = guild(1, "Receita Federal", None);
+    for title in [
+        "Aviso importante",
+        "📢 Manutenção programada",
+        "📢 Comunicado oficial da administração da comunidade — Evento especial",
+    ] {
+        let base = Document {
+            title: title.into(),
+            ..legacy()
+        };
+        assert!(!announcements::uses_default_title(title));
+        assert_eq!(
+            announcements::for_guild(&base, &current).unwrap().title,
+            title
+        );
+    }
+}
+#[test]
+fn quick_preview_and_publish_share_default_header_without_mutating_the_draft() {
+    let current = guild(1, "Receita Federal", None);
+    let base = Document {
+        title: String::new(),
+        ..legacy()
+    };
+    let quick = announcements::for_guild(
+        &announcements::with_message(&base, "Comunicado").unwrap(),
+        &current,
+    )
+    .unwrap();
+    let draft = Document {
+        description: "Comunicado".into(),
+        ..base.clone()
+    };
+    let preview = announcements::for_guild(&draft, &current).unwrap();
+    let publish = announcements::for_guild(&draft, &current).unwrap();
+    assert_eq!(quick, preview);
+    assert_eq!(preview, publish);
+    assert_eq!(
+        serde_json::to_value(preview.embeds("announcements").unwrap()).unwrap()[0]["title"],
+        "📢 Comunicado oficial da administração da comunidade — Receita Federal"
+    );
+    assert!(draft.title.is_empty());
+    let renamed = guild(1, "Comunidade renomeada", None);
+    assert_eq!(
+        announcements::for_guild(&draft, &renamed).unwrap().title,
+        "📢 Comunicado oficial da administração da comunidade — Comunidade renomeada"
     );
 }
 #[test]

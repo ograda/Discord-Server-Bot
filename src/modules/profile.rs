@@ -1,5 +1,5 @@
 use crate::{
-    core::{Context, Error, permissions},
+    core::{Context, Error, interactions, permissions},
     modules::actions::ProfileAction,
     services::{
         profile::{self as service, Patch},
@@ -44,7 +44,7 @@ pub async fn profile(
         bool,
     >,
 ) -> Result<(), Error> {
-    ctx.defer_ephemeral().await?;
+    interactions::defer(ctx).await?;
     let cfg = permissions::guild_config(ctx)?;
     let action = cfg.select_action(
         "profile",
@@ -120,8 +120,8 @@ pub async fn profile(
                 .profile_client
                 .attachment(&image, normalizar.unwrap_or(false))
                 .await?;
-            ctx.say(format!("Imagem validada: {}×{}, {} bytes de saída, {}. {}", prepared.width, prepared.height, prepared.output_bytes, prepared.mime,
-                if prepared.normalized { "Normalização solicitada: PNG 512×512 com proporção preservada e margens transparentes; GIF torna-se estático." } else { "Dimensões e formato preservados." })).await?;
+            interactions::followup(ctx, format!("Imagem validada: {}×{}, {} bytes de saída, {}. {}", prepared.width, prepared.height, prepared.output_bytes, prepared.mime,
+                if prepared.normalized { "Normalização solicitada: PNG 512×512 com proporção preservada e margens transparentes; GIF torna-se estático." } else { "Dimensões e formato preservados." }), false).await?;
             Patch {
                 avatar: Some(prepared.data),
                 ..Default::default()
@@ -150,13 +150,17 @@ async fn apply(ctx: Context<'_>, action: &str, desired: Patch) -> Result<(), Err
     )
     .await?;
     tracing::info!(guild = %auth.guild.id, module = "profile", action, stage = "complete", changed, "Perfil da guilda aplicado e estado salvo");
-    ctx.say(if action == "revert" {
-        "Perfil TOML restaurado nesta guilda; personalizações JSON limpas após sucesso."
-    } else if changed {
-        "Perfil desta guilda atualizado e personalização salva."
-    } else {
-        "Perfil já corresponde ao solicitado; personalização salva nesta guilda."
-    })
+    interactions::followup(
+        ctx,
+        if action == "revert" {
+            "Perfil TOML restaurado nesta guilda; personalizações JSON limpas após sucesso."
+        } else if changed {
+            "Perfil desta guilda atualizado e personalização salva."
+        } else {
+            "Perfil já corresponde ao solicitado; personalização salva nesta guilda."
+        },
+        true,
+    )
     .await?;
     Ok(())
 }

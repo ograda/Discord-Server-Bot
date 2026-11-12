@@ -896,6 +896,349 @@ fn announcement_guild(name: &str, icon: Option<&str>) -> String {
 }
 
 #[tokio::test]
+async fn profile_defer_then_followup_use_different_routes_and_ack_only_once() {
+    use discord_server_bot::core::interactions::{self as i, Responses, Stage};
+    let (http, server) = mock_discord(vec![(204, String::new()), (200, message(9))]);
+    http.set_application_id(s::ApplicationId::new(99));
+    let responses = Responses::default();
+    let id = s::InteractionId::new(1000);
+    assert!(
+        i::followup_request(
+            &http,
+            id,
+            "TEST_TOKEN",
+            Stage::Progress,
+            false,
+            "Não enviar".into()
+        )
+        .await
+        .is_err()
+    );
+    i::initial(
+        &http,
+        &responses,
+        id,
+        "TEST_TOKEN",
+        Stage::SlashDefer,
+        s::CreateInteractionResponse::Defer(
+            s::CreateInteractionResponseMessage::new().ephemeral(true),
+        ),
+    )
+    .await
+    .unwrap();
+    i::followup_request(
+        &http,
+        id,
+        "TEST_TOKEN",
+        Stage::Progress,
+        true,
+        "Recebido".into(),
+    )
+    .await
+    .unwrap();
+    let duplicate = i::initial(
+        &http,
+        &responses,
+        id,
+        "TEST_TOKEN",
+        Stage::SlashDefer,
+        s::CreateInteractionResponse::Acknowledge,
+    )
+    .await
+    .unwrap_err();
+    assert!(duplicate.downcast_ref::<i::Failure>().unwrap().duplicate);
+    let records = server.join().unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(
+        records[0]
+            .0
+            .contains("POST /api/v10/interactions/1000/TEST_TOKEN/callback")
+    );
+    assert_eq!(records[0].1["type"], 5);
+    assert_eq!(records[0].1["data"]["flags"], 64);
+    assert!(
+        records[1]
+            .0
+            .contains("POST /api/v10/webhooks/99/TEST_TOKEN")
+    );
+    assert_eq!(records[1].1["flags"], 64);
+    assert_eq!(
+        records[1].1["allowed_mentions"]["parse"],
+        serde_json::json!([])
+    );
+}
+
+#[tokio::test]
+async fn unknown_interaction_is_tagged_with_callback_stage_and_never_retried() {
+    use discord_server_bot::core::interactions::{self as i, Responses, Stage};
+    let (http, server) = mock_discord(vec![(
+        404,
+        serde_json::json!({"code":10062,"message":"PRIVATE INTERACTION TOKEN"}).to_string(),
+    )]);
+    let responses = Responses::default();
+    let error = i::initial(
+        &http,
+        &responses,
+        s::InteractionId::new(1000),
+        "PRIVATE_TOKEN",
+        Stage::SlashDefer,
+        s::CreateInteractionResponse::Defer(
+            s::CreateInteractionResponseMessage::new().ephemeral(true),
+        ),
+    )
+    .await
+    .unwrap_err();
+    let failure = error.downcast_ref::<i::Failure>().unwrap();
+    assert_eq!(failure.code, Some(10062));
+    assert_eq!(failure.stage, Stage::SlashDefer);
+    assert_eq!(
+        failure.stage.route(),
+        "POST /interactions/{id}/{token}/callback"
+    );
+    assert!(!format!("{error:?}").contains("PRIVATE"));
+    assert!(!i::may_report_after(false, 1000, &error));
+    assert!(!i::may_report_after(true, 1000, &error));
+    assert!(
+        i::initial(
+            &http,
+            &responses,
+            s::InteractionId::new(1000),
+            "PRIVATE_TOKEN",
+            Stage::SlashDefer,
+            s::CreateInteractionResponse::Acknowledge
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(server.join().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn confirmations_ack_cancel_and_submit_once_and_expired_ack_cannot_confirm() {
+    use discord_server_bot::core::interactions::{self as i, Responses};
+    let (http, server) = mock_discord(vec![
+        (204, String::new()),
+        (204, String::new()),
+        (
+            404,
+            serde_json::json!({"code":10062,"message":"Unknown interaction"}).to_string(),
+        ),
+    ]);
+    let responses = Responses::default();
+    assert!(
+        !i::confirmation(
+            &http,
+            &responses,
+            s::InteractionId::new(1001),
+            "TEST",
+            "confirm:1",
+            "cancel:1"
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        i::confirmation(
+            &http,
+            &responses,
+            s::InteractionId::new(1002),
+            "TEST",
+            "confirm:1",
+            "confirm:1"
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        i::confirmation(
+            &http,
+            &responses,
+            s::InteractionId::new(1002),
+            "TEST",
+            "confirm:1",
+            "confirm:1"
+        )
+        .await
+        .is_err()
+    );
+    let expired = i::confirmation(
+        &http,
+        &responses,
+        s::InteractionId::new(1003),
+        "TEST",
+        "confirm:1",
+        "confirm:1",
+    )
+    .await
+    .unwrap_err();
+    assert!(i::may_report_after(true, 1000, &expired));
+    let records = server.join().unwrap();
+    assert_eq!(records.len(), 3);
+    assert!(records.iter().all(|r| r.1["type"] == 6));
+    assert!(records.iter().all(|r| !r.0.contains("/members/")));
+}
+
+#[tokio::test]
+async fn concurrent_consumers_cannot_acknowledge_the_same_interaction_twice() {
+    use discord_server_bot::core::interactions::{self as i, Responses, Stage};
+    let (http, server) = mock_discord(vec![(204, String::new())]);
+    let responses = Responses::default();
+    let (one, two) = tokio::join!(
+        i::initial(
+            &http,
+            &responses,
+            s::InteractionId::new(1000),
+            "TEST",
+            Stage::ConfirmationAck,
+            s::CreateInteractionResponse::Acknowledge
+        ),
+        i::initial(
+            &http,
+            &responses,
+            s::InteractionId::new(1000),
+            "TEST",
+            Stage::ConfirmationAck,
+            s::CreateInteractionResponse::Acknowledge
+        )
+    );
+    assert_eq!(usize::from(one.is_ok()) + usize::from(two.is_ok()), 1);
+    assert_eq!(server.join().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn modal_open_and_submit_have_separate_initial_responses_and_final_expiry_preserves_outcome()
+{
+    use discord_server_bot::core::interactions::{self as i, Responses, Stage};
+    let (http, server) = mock_discord(vec![
+        (204, String::new()),
+        (204, String::new()),
+        (
+            404,
+            serde_json::json!({"code":10015,"message":"PRIVATE_TOKEN"}).to_string(),
+        ),
+    ]);
+    http.set_application_id(s::ApplicationId::new(99));
+    let responses = Responses::default();
+    i::initial(
+        &http,
+        &responses,
+        s::InteractionId::new(2000),
+        "TEST",
+        Stage::ModalOpen,
+        s::CreateInteractionResponse::Modal(
+            s::CreateModal::new("modal:2000", "Perfil").components(vec![
+                s::CreateActionRow::InputText(s::CreateInputText::new(
+                    s::InputTextStyle::Short,
+                    "Valor",
+                    "value",
+                )),
+            ]),
+        ),
+    )
+    .await
+    .unwrap();
+    i::initial(
+        &http,
+        &responses,
+        s::InteractionId::new(2001),
+        "TEST",
+        Stage::ModalSubmitAck,
+        s::CreateInteractionResponse::Acknowledge,
+    )
+    .await
+    .unwrap();
+    let error = i::followup_request(
+        &http,
+        s::InteractionId::new(1000),
+        "TEST",
+        Stage::Result,
+        true,
+        "Perfil atualizado".into(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("perfil já foi processado"));
+    assert!(!error.to_string().contains("antes de executar"));
+    assert!(!i::may_report_after(true, 1000, &error));
+    let records = server.join().unwrap();
+    assert_eq!(records[0].1["type"], 9);
+    assert_eq!(records[1].1["type"], 6);
+    assert!(records[2].0.contains("/webhooks/99/TEST"));
+}
+
+#[test]
+fn interaction_deadline_and_permission_diagnostics_are_distinct() {
+    use discord_server_bot::core::{diagnostics, interactions};
+    let epoch = 1_420_070_400_000;
+    let created = 1_800_000_000_000u64;
+    let id = (created - epoch) << 22;
+    assert_eq!(interactions::age_at(id, created + 2999), Some(2999));
+    assert_eq!(interactions::age_at(id, created + 3001), Some(3001));
+    assert_eq!(interactions::age_at(id, created - 1), None);
+    let expired = diagnostics::http_message(404, 10062);
+    assert!(expired.contains("Interação"));
+    assert!(!expired.contains("pending"));
+    assert!(diagnostics::http_message(403, 50001).contains("negou acesso"));
+    assert!(diagnostics::http_message(403, 50013).contains("permissão insuficiente"));
+    assert!(diagnostics::http_message(400, 40060).contains("já respondida"));
+    assert_eq!(
+        diagnostics::discord_route(
+            "POST",
+            "https://discord.com/api/v10/interactions/123/PRIVATE_TOKEN/callback?private=SECRET"
+        ),
+        "POST /interactions/{id}/{token}/callback"
+    );
+    assert_eq!(
+        diagnostics::discord_route("PATCH", "https://discord.com/api/v10/guilds/1/members/@me"),
+        "PATCH /guilds/{guild}/members/@me"
+    );
+}
+
+#[tokio::test]
+async fn permission_failures_and_failed_error_notifications_keep_the_correct_scope() {
+    use discord_server_bot::core::interactions::{self as i, Responses, Stage};
+    for (code, expected) in [(50001, "negou acesso"), (50013, "permissão insuficiente")] {
+        let (http, server) = mock_discord(vec![(
+            403,
+            serde_json::json!({"code":code,"message":"PRIVATE_TOKEN"}).to_string(),
+        )]);
+        let error = i::initial(
+            &http,
+            &Responses::default(),
+            s::InteractionId::new(2000),
+            "TEST",
+            Stage::ConfirmationAck,
+            s::CreateInteractionResponse::Acknowledge,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.downcast_ref::<i::Failure>().unwrap().code, Some(code));
+        assert!(error.to_string().contains(expected));
+        assert!(!error.to_string().contains("expirada"));
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+    let (http, server) = mock_discord(vec![(
+        404,
+        serde_json::json!({"code":10015,"message":"PRIVATE_TOKEN"}).to_string(),
+    )]);
+    http.set_application_id(s::ApplicationId::new(99));
+    let error = i::followup_request(
+        &http,
+        s::InteractionId::new(1000),
+        "TEST",
+        Stage::ErrorNotice,
+        true,
+        "Diagnóstico original".into(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("erro original nos logs"));
+    assert!(!error.to_string().contains("antes de executar"));
+    assert!(!i::may_report_after(true, 1000, &error));
+    assert_eq!(server.join().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn announcement_upload_multipart_edit_restart_replace_and_remove_preserve_message_id() {
     use discord_server_bot::services::announcements::media::{self, ImageChange, PublishedImage};
     let dir = fixture();

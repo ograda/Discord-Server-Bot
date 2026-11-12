@@ -1,4 +1,5 @@
 pub mod announcements;
+pub mod attachments;
 pub mod catalog;
 pub mod content;
 pub mod links;

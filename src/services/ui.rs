@@ -1,3 +1,4 @@
+use crate::core::interactions::{self, Stage};
 use crate::core::{Context, Error};
 use anyhow::ensure;
 use poise::serenity_prelude as s;
@@ -21,26 +22,38 @@ pub async fn confirm_with_files(
 ) -> Result<bool, Error> {
     let confirm = format!("confirm:{}", ctx.id());
     let reply = confirmation_reply(ctx.id(), prompt, label, content, files)?;
-    let reply = ctx.send(reply).await?;
-    let message = reply.message().await?;
+    let reply = ctx
+        .send(reply)
+        .await
+        .map_err(|e| interactions::tagged(Stage::Prompt, ctx.id(), e))?;
+    let message = reply
+        .message()
+        .await
+        .map_err(|e| interactions::tagged(Stage::ConfirmationMessage, ctx.id(), e))?;
     let interaction = message
         .await_component_interaction(ctx.serenity_context())
         .author_id(ctx.author().id)
         .timeout(Duration::from_secs(120))
         .await;
     let confirmed = if let Some(interaction) = interaction {
-        interaction
-            .create_response(ctx.http(), s::CreateInteractionResponse::Acknowledge)
-            .await?;
-        interaction.data.custom_id == confirm
+        interactions::confirmation(
+            ctx.http(),
+            &ctx.data().interactions,
+            interaction.id,
+            &interaction.token,
+            &confirm,
+            &interaction.data.custom_id,
+        )
+        .await?
     } else {
         false
     };
     reply
         .edit(ctx, poise::CreateReply::default().components(vec![]))
-        .await?;
+        .await
+        .map_err(|e| interactions::tagged(Stage::ConfirmationDisable, ctx.id(), e))?;
     if !confirmed {
-        ctx.say("Operação cancelada ou expirada; nada alterado.")
+        interactions::followup(ctx, "Operação cancelada ou expirada; nada alterado.", false)
             .await?;
     }
     Ok(confirmed)
@@ -176,30 +189,33 @@ pub async fn open_form<M: poise::Modal + Send + Sync>(
                     s::CreateButton::new(&custom_id).label("Preencher formulário"),
                 ])]),
         )
-        .await?;
-    let message = reply.message().await?;
+        .await
+        .map_err(|e| interactions::tagged(Stage::Prompt, ctx.id(), e))?;
+    let message = reply
+        .message()
+        .await
+        .map_err(|e| interactions::tagged(Stage::ConfirmationMessage, ctx.id(), e))?;
     let interaction = message
         .await_component_interaction(ctx.serenity_context())
         .author_id(ctx.author().id)
         .timeout(Duration::from_secs(90))
         .await;
     let result = if let Some(interaction) = interaction {
-        poise::execute_modal_on_component_interaction(
-            ctx,
-            interaction,
-            Some(form),
-            Some(Duration::from_secs(180)),
-        )
-        .await?
+        interactions::modal(ctx, &interaction, form, Duration::from_secs(180)).await?
     } else {
         None
     };
     reply
         .edit(ctx, poise::CreateReply::default().components(vec![]))
-        .await?;
+        .await
+        .map_err(|e| interactions::tagged(Stage::ConfirmationDisable, ctx.id(), e))?;
     if result.is_none() {
-        ctx.say("Formulário cancelado ou expirado; nada alterado.")
-            .await?;
+        interactions::followup(
+            ctx,
+            "Formulário cancelado ou expirado; nada alterado.",
+            false,
+        )
+        .await?;
     }
     Ok(result)
 }

@@ -15,9 +15,9 @@ use std::time::Duration;
 #[derive(poise::Modal)]
 #[name = "Anúncio"]
 pub struct AnnouncementForm {
-    #[name = "Título"]
+    #[name = "Título (opcional)"]
     #[max_length = 256]
-    title: String,
+    title: Option<String>,
     #[name = "Mensagem"]
     #[paragraph]
     #[max_length = 4000]
@@ -33,7 +33,8 @@ pub async fn announcement_modal(
     doc: &Document,
 ) -> Result<Option<(Document, Option<String>)>, Error> {
     let form = AnnouncementForm {
-        title: doc.title.clone(),
+        title: (!crate::services::announcements::uses_default_title(&doc.title))
+            .then(|| doc.title.clone()),
         description: doc.description.clone(),
         color: format!("{:06X}", doc.color),
         image_url: None,
@@ -54,7 +55,7 @@ pub async fn announcement_modal(
             let url = v.image_url.filter(|v| !v.trim().is_empty());
             Ok((
                 Document {
-                    title: v.title,
+                    title: v.title.unwrap_or_default(),
                     description: v.description,
                     color: u32::from_str_radix(v.color.trim().trim_start_matches('#'), 16)
                         .context("Cor hexadecimal inválida")?,
@@ -337,6 +338,13 @@ pub async fn announcement(
     permissions::conditional_parameters("announcement", &action, &supplied)?;
     permissions::action(ctx, "announcement", &action)?;
     permissions::administrative(ctx, s::Permissions::MANAGE_MESSAGES).await?;
+    // Interaction attachment URLs can expire while an administrator fills the modal.
+    let upload = if let Some(attachment) = imagem.as_ref() {
+        media::check_input(imagem_acao, true, url_imagem.as_deref())?;
+        Some(media::download(attachment, media::upload_limit(ctx)).await?)
+    } else {
+        None
+    };
     let state = {
         let _guard = ctx.data().store.gate.lock().await;
         ctx.data().store.read(cfg.guild_id)?
@@ -401,7 +409,7 @@ pub async fn announcement(
         "Informe a URL alternativa somente no formulário ou no parâmetro, não em ambos"
     );
     let url = modal_url.as_deref().or(url_imagem.as_deref());
-    let change = media::input(imagem_acao, imagem.as_ref(), url, media::upload_limit(ctx)).await?;
+    let change = media::prepared_input(imagem_acao, upload, url)?;
     p::preview_with_image(
         ctx,
         Plan {

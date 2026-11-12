@@ -7,7 +7,7 @@ use anyhow::{Context as _, Result, ensure};
 use poise::serenity_prelude as s;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{io::Cursor, time::Duration};
+use std::io::Cursor;
 
 pub const MAX_UPLOAD_BYTES: usize = 8 * 1024 * 1024;
 const MAX_DECODE_BYTES: u64 = 128 * 1024 * 1024;
@@ -48,12 +48,21 @@ pub async fn input(
     url: Option<&str>,
     limit: usize,
 ) -> Result<ImageChange> {
+    check_input(action, attachment.is_some(), url)?;
+    let upload = if let Some(attachment) = attachment {
+        Some(download(attachment, limit).await?)
+    } else {
+        None
+    };
+    prepared_input(action, upload, url)
+}
+pub fn check_input(action: Option<ImageAction>, upload: bool, url: Option<&str>) -> Result<()> {
     let url = url.filter(|url| !url.trim().is_empty());
     ensure!(
-        attachment.is_none() || url.is_none(),
+        !upload || url.is_none(),
         "Validação da imagem: escolha apenas upload OU URL alternativa"
     );
-    let supplied = attachment.is_some() || url.is_some();
+    let supplied = upload || url.is_some();
     match action {
         Some(ImageAction::Keep) => ensure!(
             !supplied,
@@ -64,7 +73,6 @@ pub async fn input(
                 !supplied,
                 "Remover imagem não aceita upload ou URL simultâneos"
             );
-            return Ok(ImageChange::Remove);
         }
         Some(ImageAction::Replace) => ensure!(
             supplied,
@@ -72,10 +80,21 @@ pub async fn input(
         ),
         None => (),
     }
-    if let Some(attachment) = attachment {
-        return Ok(ImageChange::Upload(download(attachment, limit).await?));
+    Ok(())
+}
+pub fn prepared_input(
+    action: Option<ImageAction>,
+    upload: Option<Upload>,
+    url: Option<&str>,
+) -> Result<ImageChange> {
+    check_input(action, upload.is_some(), url)?;
+    if matches!(action, Some(ImageAction::Remove)) {
+        return Ok(ImageChange::Remove);
     }
-    if let Some(url) = url {
+    if let Some(upload) = upload {
+        return Ok(ImageChange::Upload(upload));
+    }
+    if let Some(url) = url.filter(|url| !url.trim().is_empty()) {
         let change = ImageChange::External(url.into());
         change.apply(&mut Document::default())?;
         return Ok(change);
@@ -211,76 +230,18 @@ pub fn upload_limit(ctx: crate::core::Context<'_>) -> usize {
     }
 }
 pub async fn download(attachment: &s::Attachment, limit: usize) -> Result<Upload> {
-    ensure!(
-        attachment.size > 0 && attachment.size as usize <= limit.min(MAX_UPLOAD_BYTES),
-        "Validação da imagem: anexo vazio ou acima do limite de upload (máximo 8 MiB)"
-    );
-    let url = url::Url::parse(&attachment.url)
-        .map_err(|_| anyhow::anyhow!("Download da imagem: endereço de anexo inválido"))?;
-    ensure!(
-        url.scheme() == "https"
-            && matches!(
-                url.host_str(),
-                Some("cdn.discordapp.com" | "media.discordapp.net")
-            )
-            && url.path().starts_with("/attachments/")
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.port().is_none(),
-        "Download da imagem: somente anexos oficiais do Discord são aceitos"
-    );
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
-        .build()
-        .context("Download da imagem: falha ao preparar cliente HTTP")?;
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|_| anyhow::anyhow!("Download da imagem: falha de transporte"))?;
-    let mime = attachment.content_type.clone().or_else(|| {
-        response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|h| h.to_str().ok())
-            .map(str::to_owned)
-    });
-    let bytes = read_response(response, limit).await?;
-    ensure!(
-        bytes.len() == attachment.size as usize,
-        "Download da imagem: tamanho recebido difere do anexo informado pelo Discord"
-    );
+    let downloaded = super::super::attachments::download(
+        attachment,
+        limit.min(MAX_UPLOAD_BYTES),
+        super::super::attachments::Purpose::AnnouncementImage,
+    )
+    .await?;
     let name = attachment.filename.clone();
-    tokio::task::spawn_blocking(move || validate(&bytes, &name, mime.as_deref(), limit))
-        .await
-        .context("Processamento da imagem: tarefa interrompida")?
-}
-pub async fn read_response(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
-    let limit = limit.min(MAX_UPLOAD_BYTES);
-    ensure!(
-        response.status().is_success(),
-        "Download da imagem: HTTP {}",
-        response.status().as_u16()
-    );
-    ensure!(
-        response.content_length().is_none_or(|n| n <= limit as u64),
-        "Download da imagem: resposta acima do limite"
-    );
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| anyhow::anyhow!("Download da imagem: leitura interrompida"))?
-    {
-        ensure!(
-            chunk.len() <= limit.saturating_sub(bytes.len()),
-            "Download da imagem: resposta acima do limite"
-        );
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(bytes)
+    tokio::task::spawn_blocking(move || {
+        validate(&downloaded.bytes, &name, downloaded.mime.as_deref(), limit)
+    })
+    .await
+    .context("Processamento da imagem: tarefa interrompida")?
 }
 
 pub fn main_attachment<'a>(

@@ -32,7 +32,7 @@ Sem `mensagem`, clique no botão privado Preencher formulário. O modal oferece:
 
 | Campo | Uso |
 |---|---|
-| Título | Obrigatório |
+| Título | Opcional; vazio utiliza o cabeçalho oficial da comunidade |
 | Mensagem | Obrigatória, multilinha |
 | Cor hexadecimal | Inicializada com a cor do template TOML |
 | URL alternativa | Opcional; não preencher quando enviar upload |
@@ -51,11 +51,22 @@ com o embed para o canal configurado. Não exige outro upload. Cancelar ou deixa
 expirar a confirmação em 120 segundos descarta o rascunho sem publicação pública.
 O formulário tem prazo de 180 segundos após a abertura. Não há hospedagem própria.
 
+Sem título personalizado, o construtor utiliza
+`📢 Comunicado oficial da administração da comunidade — {guild.name}`, obtendo
+o nome atual pela API do Discord. O título genérico legado `📢 Anúncio` e o
+fallback interno `announcements` também usam esse padrão, sem reescrever TOMLs.
+Outros títulos do template ou do administrador são preservados. Preview, Publish
+e `/announce` compartilham essa regra. A largura do embed continua sendo definida
+automaticamente pelo cliente Discord.
+
 ## Validações e limites
 
 São aceitos **PNG, JPEG, WebP e GIF**, com extensão coerente, MIME compatível
 quando informado e conteúdo real decodificável. O limite da aplicação é **8 MiB**
 por arquivo, reduzido ao limite indicado pela interação quando este for menor.
+Profile e Announcements utilizam o mesmo downloader, incluindo suporte a anexos
+temporários `/ephemeral-attachments/`. O arquivo é baixado antes de abrir o modal,
+preservando a assinatura da URL; veja [diagnóstico e homologação](attachments.md).
 O download lê os bytes com limite progressivo, timeout e sem redirecionamentos;
 aceita somente URLs de anexos oficiais recebidos do Discord. Não executa arquivos.
 

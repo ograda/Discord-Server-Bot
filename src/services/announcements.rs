@@ -4,6 +4,14 @@ use poise::serenity_prelude::{GuildId, Http, MessageId, PartialGuild};
 
 pub mod media;
 
+pub fn uses_default_title(title: &str) -> bool {
+    // Keep the shipped legacy placeholder compatible without rewriting any TOML.
+    matches!(title.trim(), "" | "📢 Anúncio" | "announcements")
+}
+pub fn default_title(guild_name: &str) -> String {
+    format!("📢 Comunicado oficial da administração da comunidade — {guild_name}")
+}
+
 /// TOML/JSON identity fields are legacy values; the Discord guild supplies them at render time.
 pub fn without_legacy_identity(mut doc: Document) -> Document {
     doc.thumbnail.clear();
@@ -13,6 +21,9 @@ pub fn without_legacy_identity(mut doc: Document) -> Document {
 
 pub fn for_guild(base: &Document, guild: &PartialGuild) -> Result<Document> {
     let mut doc = without_legacy_identity(base.clone());
+    if uses_default_title(&doc.title) {
+        doc.title = default_title(&guild.name);
+    }
     doc.thumbnail = guild.icon_url().unwrap_or_default();
     doc.footer = format!("Comunicado oficial • {} • Ograda Solutions Bot", guild.name);
     ensure!(

@@ -105,6 +105,10 @@ Detalhes de formatos, limites, persistência e testes em [Announcements](announc
 
 ## Profile
 
+Erros 10062 são tratados separadamente das permissões 50001/50013. O comando
+confirma o recebimento antes de consultar/processar o perfil, não repete callbacks
+iniciais e usa follow-up após o defer. Veja [sequência de respostas e homologação](profile-interactions.md).
+
 `/profile` ou `ação:revert` pede confirmação e aplica nickname/avatar/bio definidos
 em `config.toml`, com fallback por campo para os defaults compartilhados. Valores
 ausentes são removidos do perfil da guilda; nunca muda o username/avatar global.

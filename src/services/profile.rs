@@ -468,7 +468,8 @@ impl Client {
             .send()
             .await
             .map_err(|_| anyhow::anyhow!("Falha de transporte consultando o perfil"))?;
-        self.response(guild, response).await
+        self.response(guild, response, "GET /guilds/{guild}/members/{bot}")
+            .await
     }
     pub async fn update(
         &self,
@@ -482,7 +483,9 @@ impl Client {
         self.check_cooldown(guild).await?;
         tracing::info!(%guild, method = "PATCH", route = "/guilds/{guild}/members/@me", avatar = patch.avatar.is_some(), nick = patch.nick.is_some(), bio = patch.bio.is_some(), payload_bytes = serde_json::to_vec(patch)?.len(), "Enviando perfil à API Discord");
         let response = self.http.patch(format!("{}/guilds/{guild}/members/@me", self.api_root)).header(reqwest::header::AUTHORIZATION, authorization(token)?).json(patch).send().await.map_err(|_| anyhow::anyhow!("Requisição HTTP de perfil: falha de transporte ou timeout; resultado incerto. Confira o perfil do bot nesta guilda antes de tentar novamente."))?;
-        let result = self.response(guild, response).await?;
+        let result = self
+            .response(guild, response, "PATCH /guilds/{guild}/members/@me")
+            .await?;
         ensure!(
             patch.avatar.is_none() || result.avatar.as_ref().is_some_and(|hash| !hash.is_empty()),
             "Resposta HTTP de perfil: Discord não confirmou o avatar da guilda; nada persistido. Confira o perfil do bot nesta guilda antes de repetir."
@@ -509,8 +512,9 @@ impl Client {
         &self,
         guild: s::GuildId,
         response: reqwest::Response,
+        route: &'static str,
     ) -> Result<MemberProfile> {
-        tracing::info!(%guild, status = response.status().as_u16(), "Resposta HTTP de perfil recebida");
+        tracing::info!(%guild, module = "profile", stage = "profile_http", route, status = response.status().as_u16(), "Resposta HTTP de perfil recebida");
         if response.status().as_u16() == 429 {
             #[derive(Deserialize)]
             struct RateLimit {
@@ -547,83 +551,20 @@ impl Client {
         attachment: &s::Attachment,
         normalize: bool,
     ) -> Result<PreparedAvatar> {
-        ensure!(
-            attachment.size as usize <= MAX_AVATAR_BYTES,
-            "Validação do avatar: anexo excede 4 MiB"
-        );
-        let url = url::Url::parse(&attachment.url)
-            .map_err(|_| anyhow::anyhow!("Validação do avatar: URL do anexo inválida"))?;
-        ensure!(
-            url.scheme() == "https"
-                && matches!(
-                    url.host_str(),
-                    Some("cdn.discordapp.com" | "media.discordapp.net")
-                )
-                && url.path().starts_with("/attachments/"),
-            "Validação do avatar: use um anexo enviado ao Discord"
-        );
-        let response = self.http.get(url).send().await.map_err(|_| {
-            anyhow::anyhow!("Download do avatar: falha de transporte ou timeout obtendo o anexo")
-        })?;
-        let bytes = download_bytes(response).await?;
-        ensure!(
-            bytes.len() == attachment.size as usize,
-            "Download do avatar: tamanho recebido difere do anexo informado"
-        );
-        tracing::info!(
-            attachment_bytes = attachment.size,
-            downloaded_bytes = bytes.len(),
-            declared_width = attachment.width,
-            declared_height = attachment.height,
-            "Download de avatar concluído"
-        );
-        prepare_avatar(&bytes, attachment.content_type.as_deref(), normalize)
+        let downloaded = super::attachments::download(
+            attachment,
+            MAX_AVATAR_BYTES,
+            super::attachments::Purpose::ProfileAvatar,
+        )
+        .await?;
+        tokio::task::spawn_blocking(move || {
+            prepare_avatar(&downloaded.bytes, downloaded.mime.as_deref(), normalize)
+        })
+        .await
+        .context("Processamento do avatar: tarefa interrompida")?
     }
 }
 
-async fn download_bytes(mut response: reqwest::Response) -> Result<Vec<u8>> {
-    let mime = match response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-    {
-        Some("image/png") => "image/png",
-        Some("image/jpeg") => "image/jpeg",
-        Some("image/gif") => "image/gif",
-        Some("application/octet-stream") => "application/octet-stream",
-        None => "ausente",
-        _ => "outro",
-    };
-    tracing::info!(
-        status = response.status().as_u16(),
-        http_mime = mime,
-        "Resposta de download de avatar recebida"
-    );
-    ensure!(
-        response.status().is_success(),
-        "Download do avatar: HTTP {}",
-        response.status().as_u16()
-    );
-    if let Some(size) = response.content_length() {
-        ensure!(
-            size <= MAX_AVATAR_BYTES as u64,
-            "Validação do avatar: anexo excede 4 MiB"
-        );
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| anyhow::anyhow!("Download do avatar: falha ao receber bytes"))?
-    {
-        ensure!(
-            bytes.len() + chunk.len() <= MAX_AVATAR_BYTES,
-            "Validação do avatar: anexo excede 4 MiB"
-        );
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(bytes)
-}
 async fn parse_response(response: reqwest::Response) -> Result<MemberProfile> {
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
@@ -737,13 +678,22 @@ mod tests {
             .body(bytes.clone())
             .unwrap()
             .into();
-        assert_eq!(download_bytes(response).await.unwrap(), bytes);
-        assert!(
-            download_bytes(mock(404, "private signed URL"))
+        assert_eq!(
+            crate::services::attachments::read_response(response, MAX_AVATAR_BYTES)
                 .await
-                .unwrap_err()
-                .to_string()
-                .contains("Download do avatar: HTTP 404")
+                .unwrap()
+                .bytes,
+            bytes
+        );
+        assert!(
+            crate::services::attachments::read_response(
+                mock(404, "private signed URL"),
+                MAX_AVATAR_BYTES
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("HTTP 404")
         );
         let response: reqwest::Response = http::Response::builder()
             .status(200)
@@ -751,11 +701,11 @@ mod tests {
             .unwrap()
             .into();
         assert!(
-            download_bytes(response)
+            crate::services::attachments::read_response(response, MAX_AVATAR_BYTES)
                 .await
                 .unwrap_err()
                 .to_string()
-                .contains("excede 4 MiB")
+                .contains("acima do limite")
         );
     }
 
@@ -1033,7 +983,11 @@ mod tests {
         let guild = s::GuildId::new(1);
         assert!(
             client
-                .response(guild, mock(429, r#"{"retry_after":60,"global":false}"#))
+                .response(
+                    guild,
+                    mock(429, r#"{"retry_after":60,"global":false}"#),
+                    "PATCH /guilds/{guild}/members/@me"
+                )
                 .await
                 .is_err()
         );
@@ -1041,7 +995,11 @@ mod tests {
         assert!(client.check_cooldown(s::GuildId::new(2)).await.is_ok());
         assert!(
             client
-                .response(guild, mock(429, r#"{"retry_after":60,"global":true}"#))
+                .response(
+                    guild,
+                    mock(429, r#"{"retry_after":60,"global":true}"#),
+                    "PATCH /guilds/{guild}/members/@me"
+                )
                 .await
                 .is_err()
         );

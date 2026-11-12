@@ -15,6 +15,10 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
             .unwrap_or_else(|_| "data".into())
             .into(),
     )?;
+    tracing::info!(
+        process_id = std::process::id(),
+        "Lock exclusivo do diretório de dados adquirido; confira o PID ao investigar instâncias simultâneas"
+    );
     let templates: std::path::PathBuf = std::env::var("TEMPLATE_DIR")
         .unwrap_or_else(|_| "templates".into())
         .into();
@@ -61,7 +65,14 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
 
                         poise::FrameworkError::Command { ctx, error, .. } => {
                             let message = super::diagnostics::failure(ctx, &error);
-                            let _ = ctx.send(poise::CreateReply::default().content(message).ephemeral(true)).await;
+                            if ctx.command().name == "profile" || error.is::<super::interactions::Failure>() {
+                                if super::interactions::may_report(ctx, &error)
+                                    && let Err(reply_error) = super::interactions::notify_failure(ctx, message).await {
+                                    super::diagnostics::failure(ctx, &reply_error);
+                                }
+                            } else {
+                                let _ = ctx.send(poise::CreateReply::default().content(message).ephemeral(true)).await;
+                            }
                         }
 
                         poise::FrameworkError::ArgumentParse { ctx, .. } => {
@@ -127,6 +138,7 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
                     tracing::info!(guild = %id, "Comandos registrados");
                 }
                 Ok(Data {
+                    interactions: Default::default(),
                     role_locks: Default::default(),
                     catalog,
                     profile_client,

@@ -1,4 +1,20 @@
+[[boards]]
+id = "default"
 title = "🔗 Links da Comunidade"
-description = "Links úteis para nossa comunidade."
+description = "Aqui você encontra os principais links e grupos da nossa comunidade."
+channel = "links"
 color = 5793266
-entries = ["https://discord.gg/XnxQ9q9VB", "https://chat.whatsapp.com/FeQgpj9YQ0iDeXuIRRjWup"]
+
+[[boards.links]]
+id = "discord"
+title = "Convite do Discord"
+description = "Compartilhe o convite da nossa comunidade com seus amigos."
+url = ""
+emoji = "🎮"
+
+[[boards.links]]
+id = "whatsapp"
+title = "Grupo do WhatsApp"
+description = "Participe também do nosso grupo de WhatsApp."
+url = ""
+emoji = "📱"
