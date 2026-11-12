@@ -15,7 +15,7 @@ serde_json = "1"
 base64 = "0.22"
 sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 url = "2"
 tempfile = "3"
 icu_normalizer = { version = "2.4", default-features = false, features = ["compiled_data"] }

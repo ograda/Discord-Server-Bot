@@ -1,3 +1,4 @@
+use crate::services::announcements::media::{self, ImageAction};
 use crate::{
     core::{Context, Error, permissions},
     modules::actions::{AnnouncementAction, LinksAction, RulesAction},
@@ -17,29 +18,25 @@ pub struct AnnouncementForm {
     #[name = "Título"]
     #[max_length = 256]
     title: String,
-    #[name = "Conteúdo"]
+    #[name = "Mensagem"]
     #[paragraph]
     #[max_length = 4000]
     description: String,
     #[name = "Cor hexadecimal (#5865F2)"]
     color: String,
-    #[name = "URL da imagem"]
-    image: Option<String>,
-    #[name = "Rodapé"]
-    #[max_length = 2048]
-    footer: Option<String>,
+    #[name = "URL alternativa (opcional)"]
+    image_url: Option<String>,
 }
 pub async fn announcement_modal(
     ctx: Context<'_>,
     interaction: Option<&s::ComponentInteraction>,
     doc: &Document,
-) -> Result<Option<Document>, Error> {
+) -> Result<Option<(Document, Option<String>)>, Error> {
     let form = AnnouncementForm {
         title: doc.title.clone(),
         description: doc.description.clone(),
         color: format!("{:06X}", doc.color),
-        image: Some(doc.image.clone()),
-        footer: Some(doc.footer.clone()),
+        image_url: None,
     };
     let value = if let Some(interaction) = interaction {
         poise::execute_modal_on_component_interaction(
@@ -53,16 +50,18 @@ pub async fn announcement_modal(
         ui::open_form(ctx, form).await?
     };
     value
-        .map(|v| -> Result<Document, Error> {
-            Ok(Document {
-                title: v.title,
-                description: v.description,
-                color: u32::from_str_radix(v.color.trim().trim_start_matches('#'), 16)
-                    .context("Cor hexadecimal inválida")?,
-                image: v.image.unwrap_or_default(),
-                footer: v.footer.unwrap_or_default(),
-                ..doc.clone()
-            })
+        .map(|v| -> Result<(Document, Option<String>), Error> {
+            let url = v.image_url.filter(|v| !v.trim().is_empty());
+            Ok((
+                Document {
+                    title: v.title,
+                    description: v.description,
+                    color: u32::from_str_radix(v.color.trim().trim_start_matches('#'), 16)
+                        .context("Cor hexadecimal inválida")?,
+                    ..doc.clone()
+                },
+                url,
+            ))
         })
         .transpose()
 }
@@ -312,6 +311,11 @@ pub async fn announcement(
     #[description = "Anúncio gerenciado"]
     #[autocomplete = "announcement_autocomplete"]
     identificador: Option<String>,
+    #[description = "Upload da imagem (PNG, JPEG, WebP ou GIF); alternativa ao campo URL"]
+    imagem: Option<s::Attachment>,
+    #[description = "URL externa alternativa ao upload"] url_imagem: Option<String>,
+    #[description = "Manter imagem atual (padrão), substituir ou remover explicitamente"]
+    imagem_acao: Option<ImageAction>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
     let cfg = permissions::guild_config(ctx)?;
@@ -323,6 +327,9 @@ pub async fn announcement(
     let supplied: Vec<_> = [
         ("mensagem", mensagem.is_some()),
         ("identificador", identificador.is_some()),
+        ("imagem", imagem.is_some()),
+        ("url_imagem", url_imagem.is_some()),
+        ("imagem_acao", imagem_acao.is_some()),
     ]
     .into_iter()
     .filter_map(|(k, v)| v.then_some(k))
@@ -376,17 +383,26 @@ pub async fn announcement(
             .clone();
         (id, doc)
     };
-    let doc = if action == "remove" {
-        base
+    let (doc, modal_url) = if action == "remove" {
+        (base, None)
     } else if let Some(message) = mensagem {
-        crate::services::announcements::with_message(&base, &message)?
+        (
+            crate::services::announcements::with_message(&base, &message)?,
+            None,
+        )
     } else {
         let Some(doc) = announcement_modal(ctx, None, &base).await? else {
             return Ok(());
         };
         doc
     };
-    p::preview(
+    ensure!(
+        url_imagem.is_none() || modal_url.is_none(),
+        "Informe a URL alternativa somente no formulário ou no parâmetro, não em ambos"
+    );
+    let url = modal_url.as_deref().or(url_imagem.as_deref());
+    let change = media::input(imagem_acao, imagem.as_ref(), url, media::upload_limit(ctx)).await?;
+    p::preview_with_image(
         ctx,
         Plan {
             operation: ctx.id(),
@@ -399,6 +415,7 @@ pub async fn announcement(
             content_revision: None,
             delete: action == "remove",
         },
+        change,
     )
     .await
 }

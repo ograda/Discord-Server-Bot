@@ -29,7 +29,8 @@ preserva o quadro e sua publicação. Nos demais módulos, Remove apaga a public
 
 Links Add usa um modal de cinco campos e confirma antes de salvar. Cada quadro
 usa um único embed, com legenda `label` opcional e convite Discord por último.
-Os botões permitem obter o convite privadamente ou abri-lo. Veja o
+Copiar convite fornece o endereço privadamente; Convidar amigos mostra um aviso
+privado de indisponibilidade. O convite pode ser aberto pelo link no embed. Veja o
 [guia de Links e homologação](docs/links.md).
 
 Rules e Links usam TOML como fonte de conteúdo. Documentos antigos do JSON são
@@ -46,6 +47,13 @@ suprimidas. O perfil global e outras guildas não são alterados.
 
 Veja o [guia de comandos](docs/commands.md), o [guia de cargos individuais e em massa](docs/roles.md), [V1.1](docs/v1.1.md),
 [arquitetura](docs/architecture.md) e [multiguild](docs/multiguild.md).
+
+Anúncios aceitam PNG/JPEG/WebP/GIF pelo parâmetro nativo `imagem`, ou URL externa
+alternativa. A prévia é privada, e editar texto mantém a imagem. `imagem_acao`
+permite manter, substituir ou remover explicitamente. `/announce` também aceita
+upload opcional. O Serenity 0.12.5 não suporta File Upload em modals: o arquivo é
+selecionado no slash command antes de abrir o formulário. Veja o
+[guia de Announcements e homologação](docs/announcements.md).
 
 ## Stack e estrutura
 

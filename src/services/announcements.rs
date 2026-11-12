@@ -1,6 +1,32 @@
-use super::storage::State;
+use super::{content::Document, storage::State};
 use anyhow::{Result, bail, ensure};
-use poise::serenity_prelude::{GuildId, MessageId};
+use poise::serenity_prelude::{GuildId, Http, MessageId, PartialGuild};
+
+pub mod media;
+
+/// TOML/JSON identity fields are legacy values; the Discord guild supplies them at render time.
+pub fn without_legacy_identity(mut doc: Document) -> Document {
+    doc.thumbnail.clear();
+    doc.footer.clear();
+    doc
+}
+
+pub fn for_guild(base: &Document, guild: &PartialGuild) -> Result<Document> {
+    let mut doc = without_legacy_identity(base.clone());
+    doc.thumbnail = guild.icon_url().unwrap_or_default();
+    doc.footer = format!("Comunicado oficial • {} • Ograda Solutions Bot", guild.name);
+    ensure!(
+        !doc.embeds("announcements")?.is_empty(),
+        "Anúncio deve produzir um embed"
+    );
+    Ok(doc)
+}
+
+/// Fetch current guild identity for previews and each actual send/update, without bot-avatar fallbacks.
+pub async fn build(http: &Http, guild: GuildId, base: &Document) -> Result<Document> {
+    let current = guild.to_partial_guild(http).await?;
+    for_guild(base, &current)
+}
 
 pub fn with_message(
     base: &super::content::Document,
@@ -10,7 +36,7 @@ pub fn with_message(
         !message.trim().is_empty(),
         "Mensagem do anúncio não pode ser vazia"
     );
-    let mut doc = base.clone();
+    let mut doc = without_legacy_identity(base.clone());
     doc.text.clear();
     doc.description = message.into();
     ensure!(

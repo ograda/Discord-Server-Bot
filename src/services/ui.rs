@@ -9,24 +9,18 @@ pub async fn confirm(
     label: &str,
     content: Option<(&super::content::Document, &str)>,
 ) -> Result<bool, Error> {
+    confirm_with_files(ctx, prompt, label, content, vec![]).await
+}
+
+pub async fn confirm_with_files(
+    ctx: Context<'_>,
+    prompt: &str,
+    label: &str,
+    content: Option<(&super::content::Document, &str)>,
+    files: Vec<s::CreateAttachment>,
+) -> Result<bool, Error> {
     let confirm = format!("confirm:{}", ctx.id());
-    let cancel = format!("cancel:{}", ctx.id());
-    let mut reply = poise::CreateReply::default()
-        .content(prompt)
-        .ephemeral(true)
-        .allowed_mentions(s::CreateAllowedMentions::new())
-        .components(vec![s::CreateActionRow::Buttons(vec![
-            s::CreateButton::new(&confirm)
-                .label(label)
-                .style(s::ButtonStyle::Primary),
-            s::CreateButton::new(&cancel).label("Cancelar"),
-        ])]);
-    if let Some((document, kind)) = content {
-        reply.embeds = document.embeds(kind)?;
-        if !document.text.is_empty() {
-            reply = reply.content(&document.text);
-        }
-    }
+    let reply = confirmation_reply(ctx.id(), prompt, label, content, files)?;
     let reply = ctx.send(reply).await?;
     let message = reply.message().await?;
     let interaction = message
@@ -42,7 +36,6 @@ pub async fn confirm(
     } else {
         false
     };
-    // Consume once and disable both controls before any side effect.
     reply
         .edit(ctx, poise::CreateReply::default().components(vec![]))
         .await?;
@@ -51,6 +44,36 @@ pub async fn confirm(
             .await?;
     }
     Ok(confirmed)
+}
+
+/// Pure preview builder: files go only to the private interaction until confirmation.
+pub fn confirmation_reply(
+    operation: u64,
+    prompt: &str,
+    label: &str,
+    content: Option<(&super::content::Document, &str)>,
+    files: Vec<s::CreateAttachment>,
+) -> Result<poise::CreateReply, Error> {
+    let confirm = format!("confirm:{operation}");
+    let cancel = format!("cancel:{operation}");
+    let mut reply = poise::CreateReply::default()
+        .content(prompt)
+        .ephemeral(true)
+        .allowed_mentions(s::CreateAllowedMentions::new())
+        .components(vec![s::CreateActionRow::Buttons(vec![
+            s::CreateButton::new(&confirm)
+                .label(label)
+                .style(s::ButtonStyle::Primary),
+            s::CreateButton::new(&cancel).label("Cancelar"),
+        ])]);
+    reply.attachments = files;
+    if let Some((document, kind)) = content {
+        reply.embeds = document.embeds(kind)?;
+        if !document.text.is_empty() {
+            reply = reply.content(&document.text);
+        }
+    }
+    Ok(reply)
 }
 
 pub async fn select(

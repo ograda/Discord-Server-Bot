@@ -63,12 +63,14 @@ para compatibilidade. Outras páginas do Discord não são classificadas como co
 Um quadro aceita somente um convite principal; múltiplos convites geram erro de
 configuração. Ele aparece sempre por último no embed, sem reordenar o TOML.
 
-A linha do convite mostra **Copiar convite ↓** e a mensagem recebe dois botões:
+A linha do convite mostra **Link do convite** clicável e a mensagem recebe dois botões:
 
 - **📋 Copiar convite** responde privadamente com a URL configurada em bloco de
   código, para copiar manualmente. Não acessa nem afirma alterar a área de transferência.
-- **🎮 Convidar amigos** abre diretamente a URL configurada. Não abre um seletor
-  de amigos nem envia mensagens para eles.
+- **🎮 Convidar amigos** responde somente a quem clicou: “Lembra o besta do Ograda
+  que essa funcionalidade ainda não está disponível”. Usa um `custom_id` fixo no
+  handler persistente e não abre links, canais ou Activities. O endereço continua
+  acessível pelo **Link do convite** dentro do embed.
 
 Membros comuns podem usar esses botões. O handler de cópia valida guilda,
 canal, Message ID e autoria da publicação gerenciada; não exige autorização
@@ -121,6 +123,10 @@ imagem e rodapé). As edições permanecem na prévia até confirmar Publicar; n
 momento são salvas no TOML específico e o envio é realizado. Se o HTTP falhar
 depois da gravação, o TOML permanece salvo e o erro informa o problema remoto.
 Publicar cria a mensagem uma única vez ou edita a original, preservando Message ID.
+Se a mensagem original foi apagada e o Discord confirma `404 / 10008 — Unknown
+Message`, a confirmação de Publish cria uma substituta. A referência anterior
+fica em `state.archived_publications`, e a nova publicação recebe um novo ID.
+Outros erros não disparam recriação. O catálogo TOML permanece intacto.
 Cancelar/expirar não grava nem publica. Revisões obsoletas e cliques duplicados
 são bloqueados.
 
@@ -141,7 +147,8 @@ do arquivo específico e recarrega, sem publicar nem apagar referências.
    Cancele e confirme. Confira preservação das demais entradas e das referências.
 5. Teste Publish, Editar e Cancelar. Publique duas vezes e confira o mesmo Message ID.
 6. Como membro comum, use Copiar convite e confira a resposta privada; Convidar
-   amigos deve abrir o convite. Reinicie e teste novamente os botões públicos.
+   amigos deve mostrar somente o aviso privado. Confira o Link do convite no
+   embed. Reinicie e teste novamente os botões públicos.
 7. Modifique o convite no TOML e use Update: a publicação deve manter seu convite
    anterior até Publish. Teste erro por múltiplos convites e por limite de descrição.
 8. Teste Reset e duas guildas, verificando backups e isolamento de conteúdo/estado.

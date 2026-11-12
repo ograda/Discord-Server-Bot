@@ -94,7 +94,7 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
                             tracing::info!(bot = %data_about_bot.user.id, "Conectado ao Discord")
                         }
                         s::FullEvent::Resume { .. } => tracing::info!("Sessão Discord retomada"),
-                        s::FullEvent::InteractionCreate { interaction: s::Interaction::Component(component) } if component.data.custom_id.starts_with("links-copy:") => {
+                        s::FullEvent::InteractionCreate { interaction: s::Interaction::Component(component) } if crate::services::links::handles_invite_component(&component.data.custom_id) => {
                             crate::services::links::handle_copy(ctx, component, data).await?;
                         }
                         _ => {}

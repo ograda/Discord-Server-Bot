@@ -76,7 +76,7 @@ existir, com backup do estado anterior. Não há duplicação da mensagem.
 
 `/announcement mensagem:"Aviso importante"` usa o estilo de `announcements.toml`,
 mostra prévia e confirma antes de publicar. Sem `mensagem`, abre formulário de
-título, descrição, cor, imagem e rodapé.
+título, descrição, cor e imagem principal opcional.
 
 `/announcement ação:edit` e `ação:remove` oferecem seleção de anúncios gerenciados.
 O parâmetro `identificador` tem autocomplete por título/chave/Message ID. Também
@@ -86,8 +86,22 @@ Não existe operação pública List; o menu/autocomplete fornece a descoberta.
 
 `/announce mensagem:"Aviso"` envia imediatamente um embed ao canal `announcements`.
 `/announce mensagem:"Aviso" canal:#geral` usa outro canal da mesma guilda. Mantém
-cor, título, imagem e rodapé do template. Não cria um registro de anúncio gerenciado;
+cor, título e imagem principal do template. Não cria um registro de anúncio gerenciado;
 para edição/remoção pelo bot, utilize Announcement. Ambos suprimem menções.
+
+Em envio rápido, criação, prévia e edição, o construtor de anúncios consulta a
+guilda atual pela API: usa seu ícone como thumbnail, ou nenhuma thumbnail se não
+houver ícone. O rodapé é sempre `Comunicado oficial • {guild.name} • Ograda Solutions Bot`.
+Thumbnail e rodapé antigos do TOML/JSON são ignorados, sem reescrever os arquivos.
+O nome e o ícone são consultados novamente ao publicar; a edição mantém o Message ID.
+
+Ambos os comandos aceitam `imagem` (Attachment opcional) e `url_imagem`, como
+alternativas exclusivas. Na versão Serenity 0.12.5, o upload fica no slash command;
+o modal oferece URL alternativa, título, mensagem e cor, sem thumbnail/footer.
+Em Announcement, `imagem_acao:manter/substituir/remover` torna a edição explícita.
+Sem nova fonte, a imagem é mantida; URL vazia no formulário não remove a anterior.
+Uploads são anexados à prévia privada e à mensagem pública somente após confirmar.
+Detalhes de formatos, limites, persistência e testes em [Announcements](announcements.md).
 
 ## Profile
 
@@ -126,11 +140,12 @@ Servidor; Role exige Gerenciar Cargos; Role-all exige também Gerenciar Servidor
 continuam valendo. As permissões de canal são verificadas para o bot, permitindo
 uso por um administrador autorizado que não possa escrever diretamente no destino.
 
-Se uma publicação sumiu do Discord, Publish preserva suas referências e informa
-404. Em Rules e Announcement, Execute Remove e confirme para reconciliar aquele
-registro. Links Remove gerencia entradas do catálogo; uma publicação ausente de
-Links exige reconciliação operacional dos IDs com backup do estado, sem apagar
-o catálogo ou o JSON completo. Se `pending` indicar resultado HTTP incerto, confira o canal
+Em Links, Publish confirmado cria uma substituta quando o Discord confirma
+`404 / 10008 — Unknown Message`, arquiva a referência antiga e salva o novo ID.
+Se a mensagem existe, mantém o ID e atualiza. Erros de permissão, canal ausente
+ou transporte não criam outra publicação. Rules e Announcement preservam o
+fluxo de Remove confirmado para reconciliar uma mensagem ausente. Links Remove
+continua gerenciando somente entradas do catálogo. Se `pending` indicar resultado HTTP incerto, confira o canal
 e o estado antes de qualquer repetição; mantenha backups e não apague o JSON.
 
 ## Cargos individuais e em massa

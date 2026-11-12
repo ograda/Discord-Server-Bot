@@ -191,6 +191,11 @@ fn load_registered(root: &Path, global: GlobalConfig) -> Result<Config> {
                 let doc: crate::services::content::Document = value
                     .try_into()
                     .with_context(|| format!("Conteúdo inválido: {alias}/{kind}"))?;
+                let doc = if kind == "announcements" {
+                    crate::services::announcements::without_legacy_identity(doc)
+                } else {
+                    doc
+                };
                 doc.embeds(kind)
                     .with_context(|| format!("Conteúdo inválido: {alias}/{kind}"))?;
                 doc

@@ -337,6 +337,8 @@ async fn show(
             let interaction = message
                 .await_component_interaction(ctx.serenity_context())
                 .author_id(ctx.author().id)
+                // The persistent Gateway handler responds to this button, including in previews.
+                .filter(|interaction| interaction.data.custom_id != service::INVITE_FRIENDS_ID)
                 .timeout(deadline.saturating_duration_since(tokio::time::Instant::now()))
                 .await;
             let Some(interaction) = interaction else {

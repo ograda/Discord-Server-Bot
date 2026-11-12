@@ -17,6 +17,10 @@ pub struct Publication {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct State {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub announcement_images: HashMap<String, super::announcements::media::PublishedImage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archived_publications: Vec<ArchivedPublication>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub link_invites: HashMap<String, crate::services::links::PublishedInvite>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub role_operations: HashMap<String, crate::services::roles::Report>,
@@ -28,6 +32,12 @@ pub struct State {
     pub documents: HashMap<String, Document>,
     pub publications: HashMap<String, Publication>,
     pub pending: Option<String>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ArchivedPublication {
+    pub key: String,
+    pub publication: Publication,
+    pub revision: u64,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ArchivedDocument {
@@ -200,10 +210,18 @@ pub fn template(
         .get(kind)
         .filter(|_| !["rules", "links"].contains(&kind))
     {
-        return Ok(doc.clone());
+        return Ok(if kind == "announcements" {
+            super::announcements::without_legacy_identity(doc.clone())
+        } else {
+            doc.clone()
+        });
     }
     if let Some(doc) = guild.contents.get(kind) {
-        return Ok(doc.clone());
+        return Ok(if kind == "announcements" {
+            super::announcements::without_legacy_identity(doc.clone())
+        } else {
+            doc.clone()
+        });
     }
     let name = guild
         .templates
@@ -241,6 +259,11 @@ pub fn template(
         }
     }
     let doc: Document = value.try_into()?;
+    let doc = if kind == "announcements" {
+        super::announcements::without_legacy_identity(doc)
+    } else {
+        doc
+    };
     doc.embeds(kind)?;
     Ok(doc)
 }

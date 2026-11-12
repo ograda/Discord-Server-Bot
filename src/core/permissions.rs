@@ -13,8 +13,14 @@ pub fn action(ctx: Context<'_>, root: &str, action: &str) -> Result<(), Error> {
 pub fn conditional_parameters(root: &str, action: &str, supplied: &[&str]) -> Result<(), Error> {
     let allowed: &[&str] = match (root, action) {
         ("links", _) => &["id"],
-        ("announcement", "create") => &["mensagem"],
-        ("announcement", "edit") => &["identificador", "mensagem"],
+        ("announcement", "create") => &["mensagem", "imagem", "url_imagem", "imagem_acao"],
+        ("announcement", "edit") => &[
+            "identificador",
+            "mensagem",
+            "imagem",
+            "url_imagem",
+            "imagem_acao",
+        ],
         ("announcement", "remove") => &["identificador"],
         ("profile", "nickname") => &["apelido"],
         ("profile", "bio") => &["biografia"],

@@ -12,6 +12,14 @@ JSON existente. Não há banco, scheduler, webhooks, painel ou serviço adiciona
 - `services/catalog`: snapshots mutáveis somente de Rules/Links, com recarga explícita.
 - `services/publishing`: prévia/confirmar e transação de publicação da mensagem original.
 - `services/announcements`: construtor de mensagem, chaves, seleção e links gerenciados.
+  Centraliza também thumbnail e rodapé a partir da guilda consultada pela API no
+  preview e no envio/edição. Metadados legados são ignorados apenas para anúncios;
+  conteúdo, cor e imagem principal são preservados.
+  `announcements/media` valida downloads e bytes de PNG/JPEG/WebP/GIF com limites,
+  prepara `CreateAttachment` e calcula `EditAttachments` explicitamente a partir
+  da mensagem original. Rascunhos ficam em memória; `state.announcement_images`
+  guarda somente metadados de arquivos publicados ou URL externa. O ID da mensagem
+  permanece durante edição e os anexos não relacionados são preservados.
 - `services/links`: choices STRING, seleção de entradas e handler persistente dos botões de convite.
 - `services/profile`: download/decodificação, Data URI, REST por guilda e persistência.
 - `services/storage`: lock entre processos, mutex, revisão, journal e snapshots JSON.

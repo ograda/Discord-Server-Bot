@@ -9,6 +9,26 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const ACTIONS: &[&str] = &["preview", "publish", "update", "reset", "add", "remove"];
+pub const INVITE_FRIENDS_ID: &str = "links-invite-friends";
+
+pub fn handles_invite_component(custom_id: &str) -> bool {
+    custom_id == INVITE_FRIENDS_ID || custom_id.starts_with("links-copy:")
+}
+
+fn private_response(content: String) -> s::CreateInteractionResponseMessage {
+    s::CreateInteractionResponseMessage::new()
+        .content(content)
+        .ephemeral(true)
+        .allowed_mentions(s::CreateAllowedMentions::new())
+}
+
+pub fn invite_friends_response(custom_id: &str) -> Option<s::CreateInteractionResponseMessage> {
+    (custom_id == INVITE_FRIENDS_ID).then(|| {
+        private_response(
+            "Lembra o besta do Ograda que essa funcionalidade ainda não está disponível".into(),
+        )
+    })
+}
 
 pub fn action_option(_: s::CreateCommandOption) -> s::CreateCommandOption {
     let mut option = s::CreateCommandOption::new(
@@ -92,10 +112,7 @@ pub fn copy_content(url: &str) -> Result<String> {
     Ok(text)
 }
 pub fn copy_response(url: &str) -> Result<s::CreateInteractionResponseMessage> {
-    Ok(s::CreateInteractionResponseMessage::new()
-        .content(copy_content(url)?)
-        .ephemeral(true)
-        .allowed_mentions(s::CreateAllowedMentions::new()))
+    Ok(private_response(copy_content(url)?))
 }
 pub fn invite_components(doc: &Document, custom_id: &str) -> Result<Vec<s::CreateActionRow>> {
     let Some(invite) = doc.discord_invite()? else {
@@ -110,7 +127,9 @@ pub fn invite_components(doc: &Document, custom_id: &str) -> Result<Vec<s::Creat
         s::CreateButton::new(custom_id)
             .label("📋 Copiar convite")
             .style(s::ButtonStyle::Secondary),
-        s::CreateButton::new_link(&invite.url).label("🎮 Convidar amigos"),
+        s::CreateButton::new(INVITE_FRIENDS_ID)
+            .label("🎮 Convidar amigos")
+            .style(s::ButtonStyle::Secondary),
     ])])
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -172,6 +191,13 @@ pub async fn handle_copy(
     interaction: &s::ComponentInteraction,
     data: &crate::core::Data,
 ) -> Result<()> {
+    // Stateless routing survives restarts and is also used by private previews.
+    if let Some(response) = invite_friends_response(&interaction.data.custom_id) {
+        interaction
+            .create_response(&ctx.http, s::CreateInteractionResponse::Message(response))
+            .await?;
+        return Ok(());
+    }
     if !interaction.data.custom_id.starts_with("links-copy:") {
         return Ok(());
     }

@@ -836,12 +836,28 @@ fn mock_discord(
                         })
                         .unwrap_or(0);
                     if request.len() >= i + 4 + len {
+                        let multipart = header.to_ascii_lowercase().contains("multipart/form-data");
                         break (
                             header,
                             if len == 0 {
                                 serde_json::Value::Null
                             } else {
-                                serde_json::from_slice(&request[i + 4..i + 4 + len]).unwrap()
+                                let body = &request[i + 4..i + 4 + len];
+                                if multipart {
+                                    let marker = b"name=\"payload_json\"";
+                                    let start = body
+                                        .windows(marker.len())
+                                        .position(|w| w == marker)
+                                        .unwrap();
+                                    let body = &body[start..];
+                                    let start =
+                                        body.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                                    let body = &body[start..];
+                                    let end = body.windows(4).position(|w| w == b"\r\n--").unwrap();
+                                    serde_json::from_slice(&body[..end]).unwrap()
+                                } else {
+                                    serde_json::from_slice(body).unwrap()
+                                }
                             },
                         );
                     }
@@ -867,6 +883,190 @@ fn message(author: u64) -> String {
     message.guild_id = Some(s::GuildId::new(1));
     message.author.id = s::UserId::new(author);
     serde_json::to_string(&message).unwrap()
+}
+fn announcement_guild(name: &str, icon: Option<&str>) -> String {
+    serde_json::json!({
+        "id":"1", "name":name, "icon":icon, "owner_id":"99", "verification_level":0,
+        "default_message_notifications":0, "explicit_content_filter":0, "roles":[],
+        "emojis":[], "features":[], "mfa_level":0, "system_channel_flags":0,
+        "premium_tier":0, "preferred_locale":"pt-BR", "nsfw_level":0,
+        "stickers":[], "premium_progress_bar_enabled":false
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn announcement_upload_multipart_edit_restart_replace_and_remove_preserve_message_id() {
+    use discord_server_bot::services::announcements::media::{self, ImageChange, PublishedImage};
+    let dir = fixture();
+    let config = config::load(dir.path()).unwrap();
+    let catalog = Catalog::new(&config);
+    let mut store = Store::open(dir.path().join("data")).unwrap();
+    let gid = s::GuildId::new(1);
+    let mut encoded = Cursor::new(Vec::new());
+    image::DynamicImage::new_rgba8(32, 32)
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .unwrap();
+    let first = media::validate(
+        encoded.get_ref(),
+        "first.png",
+        Some("image/png"),
+        media::MAX_UPLOAD_BYTES,
+    )
+    .unwrap();
+    let mut encoded = Cursor::new(Vec::new());
+    image::DynamicImage::new_rgba8(64, 64)
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .unwrap();
+    let second = media::validate(
+        encoded.get_ref(),
+        "second.png",
+        Some("image/png"),
+        media::MAX_UPLOAD_BYTES,
+    )
+    .unwrap();
+    let first_name = first.attachment().filename;
+    let second_name = second.attachment().filename;
+    let files = |entries: &[(u64, &str)]| {
+        let mut value: serde_json::Value = serde_json::from_str(&message(9)).unwrap();
+        value["attachments"] = serde_json::Value::Array(entries.iter().map(|(id,name)| serde_json::json!({
+            "id":id.to_string(),"filename":name,"size":1024,"url":format!("https://cdn.discordapp.com/attachments/11/100/{name}"),"proxy_url":format!("https://media.discordapp.net/attachments/11/100/{name}")
+        })).collect());
+        value.to_string()
+    };
+    let outcomes = [
+        files(&[(501, &first_name)]),
+        files(&[(501, &first_name), (888, "other.txt")]),
+        files(&[(502, &second_name), (888, "other.txt")]),
+        files(&[(888, "other.txt")]),
+        files(&[(503, &first_name), (888, "other.txt")]),
+        files(&[(888, "other.txt")]),
+    ];
+    let mut responses = vec![];
+    for (index, result) in outcomes.iter().enumerate() {
+        responses.push((200, announcement_guild("Receita Federal", None)));
+        if index != 0 {
+            let previous = if index == 1 {
+                files(&[(501, &first_name), (888, "other.txt")])
+            } else {
+                outcomes[index - 1].clone()
+            };
+            responses.push((200, previous));
+        }
+        responses.push((200, result.clone()));
+    }
+    let (http, server) = mock_discord(responses);
+    let changes = [
+        ImageChange::Upload(first.clone()),
+        ImageChange::Keep,
+        ImageChange::Upload(second),
+        ImageChange::External("https://example.org/banner.png".into()),
+        ImageChange::Upload(first),
+        ImageChange::Remove,
+    ];
+    for (index, image) in changes.iter().enumerate() {
+        let state = store.read(gid).unwrap();
+        let base = state
+            .documents
+            .get("announcement-123")
+            .cloned()
+            .unwrap_or(Document {
+                title: "Aviso".into(),
+                description: "Texto inicial".into(),
+                ..Default::default()
+            });
+        let plan = Plan {
+            operation: 123,
+            kind: "announcements",
+            action: if index == 0 { "create" } else { "edit" }.into(),
+            key: "announcement-123".into(),
+            document: Document {
+                description: format!("Edição {index}"),
+                ..base
+            },
+            channel: s::ChannelId::new(11),
+            revision: state.revision,
+            content_revision: None,
+            delete: false,
+        };
+        publishing::execute_request(
+            &store,
+            &catalog,
+            gid,
+            s::UserId::new(9),
+            &http,
+            publishing::Request { plan: &plan, image },
+        )
+        .await
+        .unwrap();
+        let saved = store.read(gid).unwrap();
+        assert_eq!(saved.publications[&plan.key].message.get(), 100);
+        assert_eq!(
+            saved.documents[&plan.key].description,
+            format!("Edição {index}")
+        );
+        match index {
+            0 | 1 => assert!(
+                matches!(saved.announcement_images[&plan.key], PublishedImage::Attachment {id,..} if id.get()==501)
+            ),
+            2 => assert!(
+                matches!(saved.announcement_images[&plan.key], PublishedImage::Attachment {id,..} if id.get()==502)
+            ),
+            3 => assert!(matches!(
+                saved.announcement_images[&plan.key],
+                PublishedImage::External { .. }
+            )),
+            4 => assert!(
+                matches!(saved.announcement_images[&plan.key], PublishedImage::Attachment {id,..} if id.get()==503)
+            ),
+            _ => {
+                assert!(!saved.announcement_images.contains_key(&plan.key));
+                assert!(saved.documents[&plan.key].image.is_empty());
+            }
+        }
+        drop(store);
+        store = Store::open(dir.path().join("data")).unwrap();
+    }
+    let records = server.join().unwrap();
+    let writes = records
+        .iter()
+        .filter(|r| r.0.starts_with("POST ") || r.0.starts_with("PATCH "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 6);
+    assert!(writes[0].0.contains("POST /api/v10/channels/11/messages"));
+    for update in &writes[1..] {
+        assert!(update.0.contains("PATCH /api/v10/channels/11/messages/100"));
+    }
+    assert_eq!(
+        writes[0].1["embeds"][0]["image"]["url"],
+        format!("attachment://{first_name}")
+    );
+    assert_eq!(
+        writes[1].1["attachments"],
+        serde_json::json!([{"id":"501"},{"id":"888"}])
+    );
+    assert_eq!(writes[2].1["attachments"][0]["id"], "888");
+    assert_eq!(writes[2].1["attachments"][1]["filename"], second_name);
+    assert_eq!(
+        writes[3].1["attachments"],
+        serde_json::json!([{"id":"888"}])
+    );
+    assert_eq!(
+        writes[3].1["embeds"][0]["image"]["url"],
+        "https://example.org/banner.png"
+    );
+    assert!(writes[5].1["embeds"][0].get("image").is_none());
+    assert_eq!(
+        writes[5].1["attachments"],
+        serde_json::json!([{"id":"888"}])
+    );
+    assert!(
+        store
+            .read(s::GuildId::new(2))
+            .unwrap()
+            .announcement_images
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -912,13 +1112,24 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
             content_revision: Some(0),
             delete: false,
         };
-        let (http, server) = mock_discord(vec![
+        let mut responses = vec![
             (200, message(9)),
             (200, message(9)),
             (200, message(9)),
             (200, message(9)),
             (204, String::new()),
-        ]);
+        ];
+        if kind == "announcements" {
+            responses.insert(
+                0,
+                (
+                    200,
+                    announcement_guild("Receita Federal", Some("0123456789abcdef0123456789abcdef")),
+                ),
+            );
+            responses.insert(2, (200, announcement_guild("Servidor renomeado", None)));
+        }
+        let (http, server) = mock_discord(responses);
         let gid = s::GuildId::new(1);
         let bot = s::UserId::new(9);
         publishing::execute(&store, &catalog, gid, bot, &http, &plan)
@@ -927,6 +1138,13 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
         let state = store.read(gid).unwrap();
         assert_eq!(state.publications[key].message.get(), 100);
         assert_eq!(state.documents.contains_key(key), kind == "announcements");
+        if kind == "announcements" {
+            assert_eq!(
+                state.documents[key].footer,
+                "Comunicado oficial • Receita Federal • Ograda Solutions Bot"
+            );
+            assert!(state.documents[key].thumbnail.contains("/icons/1/"));
+        }
         if kind == "links" {
             assert_eq!(state.link_invites[key].url, "https://discord.gg/EXEMPLO");
             plan.document.entries[0].url = "https://discord.com/invite/OUTRO".into();
@@ -949,6 +1167,13 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
             store.read(gid).unwrap().publications[key].message.get(),
             100
         );
+        if kind == "announcements" {
+            assert_eq!(
+                store.read(gid).unwrap().documents[key].footer,
+                "Comunicado oficial • Servidor renomeado • Ograda Solutions Bot"
+            );
+            assert!(store.read(gid).unwrap().documents[key].thumbnail.is_empty());
+        }
         if kind == "links" {
             assert_eq!(
                 store.read(gid).unwrap().link_invites[key].url,
@@ -966,6 +1191,19 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
             .await
             .unwrap();
         let records = server.join().unwrap();
+        if kind == "announcements" {
+            assert_eq!(
+                records
+                    .iter()
+                    .filter(|r| r.0.contains("GET /api/v10/guilds/1 "))
+                    .count(),
+                2
+            );
+        }
+        let records = records
+            .into_iter()
+            .filter(|r| !r.0.contains("GET /api/v10/guilds/1 "))
+            .collect::<Vec<_>>();
         assert!(records[0].0.starts_with("POST "));
         assert!(
             records[2]
@@ -978,6 +1216,23 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
             serde_json::json!([])
         );
         assert_eq!(records[2].1["embeds"][0]["title"], "Updated");
+        if kind == "announcements" {
+            assert_eq!(
+                records[0].1["embeds"][0]["footer"]["text"],
+                "Comunicado oficial • Receita Federal • Ograda Solutions Bot"
+            );
+            assert!(
+                records[0].1["embeds"][0]["thumbnail"]["url"]
+                    .as_str()
+                    .unwrap()
+                    .contains("/icons/1/")
+            );
+            assert_eq!(
+                records[2].1["embeds"][0]["footer"]["text"],
+                "Comunicado oficial • Servidor renomeado • Ograda Solutions Bot"
+            );
+            assert!(records[2].1["embeds"][0].get("thumbnail").is_none());
+        }
         if kind == "links" {
             assert_eq!(
                 records[0].1["components"][0]["components"][0]["custom_id"],
@@ -988,8 +1243,13 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
                 "links-copy:124"
             );
             assert_eq!(
-                records[2].1["components"][0]["components"][1]["url"],
-                "https://discord.com/invite/OUTRO"
+                records[2].1["components"][0]["components"][1]["custom_id"],
+                discord_server_bot::services::links::INVITE_FRIENDS_ID
+            );
+            assert!(
+                records[2].1["components"][0]["components"][1]
+                    .get("url")
+                    .is_none()
             );
             assert_eq!(records[2].1["embeds"].as_array().unwrap().len(), 1);
             assert!(!store.read(gid).unwrap().link_invites.contains_key(key));
@@ -1024,6 +1284,132 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
         );
         assert!(dir.path().join("guilds/defaults/rules.toml").is_file());
         assert!(dir.path().join("guilds/defaults/links.toml").is_file());
+    }
+}
+
+#[tokio::test]
+async fn links_publish_recreates_confirmed_missing_message_and_archives_previous_reference() {
+    let dir = fixture();
+    let config = config::load(dir.path()).unwrap();
+    let catalog = Catalog::new(&config);
+    let store = Store::open(dir.path().join("data")).unwrap();
+    let gid = s::GuildId::new(1);
+    let mut state = State::default();
+    state.publications.insert(
+        "links:important".into(),
+        Publication {
+            channel: s::ChannelId::new(11),
+            message: s::MessageId::new(100),
+        },
+    );
+    store.write(gid, &state).unwrap();
+    let toml_path = dir.path().join("guilds/defaults/links.toml");
+    let original_toml = fs::read(&toml_path).unwrap();
+    let plan = Plan {
+        operation: 987,
+        kind: "links",
+        action: "publish".into(),
+        key: "links:important".into(),
+        document: Document {
+            title: "Links".into(),
+            entries: vec![link("discord", "https://discord.gg/EXEMPLO")],
+            ..Default::default()
+        },
+        channel: s::ChannelId::new(11),
+        revision: 0,
+        content_revision: Some(0),
+        delete: false,
+    };
+    let mut created: s::Message = serde_json::from_str(&message(9)).unwrap();
+    created.id = s::MessageId::new(200);
+    let missing = r#"{"code":10008,"message":"Unknown Message"}"#.to_string();
+    let (http, server) = mock_discord(vec![
+        (404, missing),
+        (200, serde_json::to_string(&created).unwrap()),
+    ]);
+    let result = publishing::execute(&store, &catalog, gid, s::UserId::new(9), &http, &plan)
+        .await
+        .unwrap();
+    assert!(result.contains("nova publicação"));
+    let saved = store.read(gid).unwrap();
+    assert_eq!(saved.publications[&plan.key].message.get(), 200);
+    assert_eq!(saved.archived_publications.len(), 1);
+    assert_eq!(
+        saved.archived_publications[0].publication.message.get(),
+        100
+    );
+    assert_eq!(saved.archived_publications[0].key, plan.key);
+    assert_eq!(saved.link_invites[&plan.key].custom_id, "links-copy:987");
+    assert!(saved.pending.is_none());
+    assert!(
+        publishing::execute(&store, &catalog, gid, s::UserId::new(9), &http, &plan)
+            .await
+            .is_err()
+    );
+    let records = server.join().unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(
+        records[0]
+            .0
+            .contains("GET /api/v10/channels/11/messages/100")
+    );
+    assert!(records[1].0.contains("POST /api/v10/channels/11/messages"));
+    assert_eq!(records[1].1["embeds"].as_array().unwrap().len(), 1);
+    assert_eq!(fs::read(&toml_path).unwrap(), original_toml);
+    assert!(
+        store
+            .read(s::GuildId::new(2))
+            .unwrap()
+            .publications
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn links_publish_does_not_recreate_on_permission_channel_or_server_errors() {
+    for (status, code) in [(403, 50013), (404, 10003), (500, 0)] {
+        let dir = fixture();
+        let config = config::load(dir.path()).unwrap();
+        let catalog = Catalog::new(&config);
+        let store = Store::open(dir.path().join("data")).unwrap();
+        let gid = s::GuildId::new(1);
+        let mut state = State::default();
+        state.publications.insert(
+            "links:important".into(),
+            Publication {
+                channel: s::ChannelId::new(11),
+                message: s::MessageId::new(100),
+            },
+        );
+        store.write(gid, &state).unwrap();
+        let plan = Plan {
+            operation: 987,
+            kind: "links",
+            action: "publish".into(),
+            key: "links:important".into(),
+            document: Document {
+                title: "Links".into(),
+                ..Default::default()
+            },
+            channel: s::ChannelId::new(11),
+            revision: 0,
+            content_revision: Some(0),
+            delete: false,
+        };
+        let (http, server) = mock_discord(vec![(
+            status,
+            serde_json::json!({"code":code,"message":"Request failed"}).to_string(),
+        )]);
+        assert!(
+            publishing::execute(&store, &catalog, gid, s::UserId::new(9), &http, &plan)
+                .await
+                .is_err()
+        );
+        assert_eq!(server.join().unwrap().len(), 1);
+        let saved = store.read(gid).unwrap();
+        assert_eq!(saved.publications[&plan.key].message.get(), 100);
+        assert!(saved.pending.is_none());
+        assert!(saved.archived_publications.is_empty());
     }
 }
 

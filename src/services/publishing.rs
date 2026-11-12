@@ -1,9 +1,20 @@
+use super::announcements::media::{self, ImageChange};
 use crate::{
     core::{Context, Error, permissions},
     services::{content::Document, storage::Publication, ui},
 };
 use anyhow::{Context as _, ensure};
 use poise::serenity_prelude as s;
+
+pub struct Request<'a> {
+    pub plan: &'a Plan,
+    pub image: &'a ImageChange,
+}
+
+pub async fn authorize_attachment(ctx: Context<'_>, target: &s::GuildChannel) -> Result<(), Error> {
+    let auth = permissions::administrative(ctx, s::Permissions::MANAGE_MESSAGES).await?;
+    permissions::ensure_bot_channel_permissions(&auth, target, s::Permissions::ATTACH_FILES)
+}
 
 pub async fn authorize_channel(
     ctx: Context<'_>,
@@ -67,22 +78,89 @@ pub struct Plan {
     pub delete: bool,
 }
 pub async fn preview(ctx: Context<'_>, plan: Plan) -> Result<(), Error> {
+    preview_with_image(ctx, plan, ImageChange::Keep).await
+}
+pub async fn preview_with_image(
+    ctx: Context<'_>,
+    plan: Plan,
+    image: ImageChange,
+) -> Result<(), Error> {
+    let mut preview = plan.document.clone();
+    if plan.kind == "announcements" {
+        image.apply(&mut preview)?;
+        if plan.delete {
+            preview.image.clear();
+        }
+        if !plan.delete
+            && matches!(image, ImageChange::Keep)
+            && media::attachment_filename(&preview.image).is_some()
+        {
+            let guild = permissions::guild_config(ctx)?.guild_id;
+            let state = {
+                let _guard = ctx.data().store.gate.lock().await;
+                ctx.data().store.read(guild)?
+            };
+            let publication = state
+                .publications
+                .get(&plan.key)
+                .context("Anexo sem publicação registrada")?;
+            ensure!(
+                publication.channel == plan.channel,
+                "Canal registrado difere do canal configurado"
+            );
+            let original = publication
+                .channel
+                .message(ctx.http(), publication.message)
+                .await?;
+            ensure!(
+                original.author.id == ctx.serenity_context().cache.current_user().id
+                    && original.guild_id.is_none_or(|id| id == guild),
+                "Mensagem original não pertence ao bot"
+            );
+            media::preview_image(&mut preview, &original, &state, &plan.key)?;
+        }
+        preview = super::announcements::build(
+            ctx.http(),
+            permissions::guild_config(ctx)?.guild_id,
+            &preview,
+        )
+        .await?;
+    }
     let label = if plan.delete { "Remover" } else { "Publicar" };
-    if !ui::confirm(
+    if !ui::confirm_with_files(
         ctx,
         "Prévia privada; confirme para modificar a publicação.",
         label,
-        Some((&plan.document, plan.kind)),
+        Some((&preview, plan.kind)),
+        image.files(),
     )
     .await?
     {
         return Ok(());
     }
-    let result = commit(ctx, &plan).await?;
+    let result = commit_request(
+        ctx,
+        Request {
+            plan: &plan,
+            image: &image,
+        },
+    )
+    .await?;
     ctx.say(result).await?;
     Ok(())
 }
 pub(crate) async fn commit(ctx: Context<'_>, plan: &Plan) -> Result<String, Error> {
+    commit_request(
+        ctx,
+        Request {
+            plan,
+            image: &ImageChange::Keep,
+        },
+    )
+    .await
+}
+async fn commit_request(ctx: Context<'_>, request: Request<'_>) -> Result<String, Error> {
+    let plan = request.plan;
     let cfg = permissions::guild_config(ctx)?;
     let guild = cfg.guild_id;
     permissions::action(ctx, plan.kind_to_root(), &plan.action)?;
@@ -93,6 +171,9 @@ pub(crate) async fn commit(ctx: Context<'_>, plan: &Plan) -> Result<String, Erro
         !plan.document.embeds(plan.kind)?.is_empty(),
     )
     .await?;
+    if matches!(request.image, ImageChange::Upload(_)) {
+        authorize_attachment(ctx, &target).await?;
+    }
     let has_publication = {
         let _guard = ctx.data().store.gate.lock().await;
         ctx.data()
@@ -110,13 +191,13 @@ pub(crate) async fn commit(ctx: Context<'_>, plan: &Plan) -> Result<String, Erro
         )?;
     }
     let bot = ctx.serenity_context().cache.current_user().id;
-    execute(
+    execute_request(
         &ctx.data().store,
         &ctx.data().catalog,
         guild,
         bot,
         ctx.http(),
-        plan,
+        request,
     )
     .await
 }
@@ -130,7 +211,33 @@ pub async fn execute(
     http: &s::Http,
     plan: &Plan,
 ) -> Result<String, Error> {
-    let embeds = plan.document.embeds(plan.kind)?;
+    execute_request(
+        store,
+        catalog,
+        guild,
+        bot,
+        http,
+        Request {
+            plan,
+            image: &ImageChange::Keep,
+        },
+    )
+    .await
+}
+pub async fn execute_request(
+    store: &super::storage::Store,
+    catalog: &super::catalog::Catalog,
+    guild: s::GuildId,
+    bot: s::UserId,
+    http: &s::Http,
+    request: Request<'_>,
+) -> Result<String, Error> {
+    let plan = request.plan;
+    let mut embeds = if plan.kind == "announcements" {
+        vec![]
+    } else {
+        plan.document.embeds(plan.kind)?
+    };
     let invite = if plan.kind == "links" {
         super::links::published_invite(&plan.document, plan.operation)?
     } else {
@@ -172,29 +279,83 @@ pub async fn execute(
                 && plan.key == super::announcements::new_id(plan.operation)),
         "Anúncio sem publicação registrada; crie um novo anúncio"
     );
+    let mut announcement = if plan.kind == "announcements" {
+        let doc = if plan.delete {
+            super::announcements::without_legacy_identity(plan.document.clone())
+        } else {
+            super::announcements::build(http, guild, &plan.document).await?
+        };
+        Some(doc)
+    } else {
+        None
+    };
     let mut missing = false;
+    let mut original = None;
     if let Some(publication) = &existing {
         ensure!(
             publication.channel == plan.channel,
             "Canal configurado mudou; referências preservadas, reconcilie o registro antes de continuar"
         );
         match plan.channel.message(http, publication.message).await {
-            Ok(message) => ensure!(
-                message.author.id == bot,
-                "Mensagem registrada não pertence ao bot"
-            ),
+            Ok(message) => {
+                ensure!(
+                    message.author.id == bot,
+                    "Mensagem registrada não pertence ao bot"
+                );
+                original = Some(message);
+            }
             Err(s::Error::Http(s::HttpError::UnsuccessfulRequest(response)))
                 if response.status_code.as_u16() == 404 =>
             {
+                let recreate_links = plan.kind == "links"
+                    && plan.action == "publish"
+                    && !plan.delete
+                    && response.error.code == 10008;
+                if plan.kind == "links" && !plan.delete && !recreate_links {
+                    return Err(s::Error::Http(s::HttpError::UnsuccessfulRequest(response)).into());
+                }
                 ensure!(
-                    plan.delete,
+                    plan.delete || recreate_links,
                     "Mensagem original não encontrada (404). IDs preservados; use Remove para reconciliar antes de uma nova publicação"
                 );
                 missing = true;
+                if recreate_links {
+                    state
+                        .archived_publications
+                        .push(super::storage::ArchivedPublication {
+                            key: plan.key.clone(),
+                            publication: publication.clone(),
+                            revision: state.revision,
+                        });
+                    tracing::info!(%guild, module = plan.kind, action = plan.action, stage = "recover_missing_publication", http_status = 404, discord_code = 10008, message = %publication.message, "Mensagem apagada; referência arquivada, criando substituta após confirmação de Publish");
+                }
             }
             Err(error) => return Err(error.into()),
         }
     }
+    let attachments = if let Some(doc) = &mut announcement {
+        if plan.delete {
+            doc.image.clear();
+        }
+        let attachments = if plan.delete {
+            s::EditAttachments::new()
+        } else if let Some(original) = &original {
+            media::edit_attachments(
+                doc,
+                request.image,
+                original,
+                state.announcement_images.get(&plan.key),
+            )?
+        } else {
+            request.image.apply(doc)?;
+            s::EditAttachments::new()
+        };
+        embeds = doc.embeds(plan.kind)?;
+        Some(attachments)
+    } else {
+        None
+    };
+    let document = announcement.as_ref().unwrap_or(&plan.document);
     state.pending = Some(format!("{}:{}", plan.key, plan.operation));
     store.write(guild, &state)?;
     tracing::info!(%guild, module = plan.kind, action = plan.action, stage = "http", channel = %plan.channel, "Aplicando publicação confirmada");
@@ -215,26 +376,35 @@ pub async fn execute(
         }
         if plan.kind == "announcements" {
             state.documents.remove(&plan.key);
+            state.announcement_images.remove(&plan.key);
         }
     } else {
-        let message = if let Some(publication) = existing {
+        let message = if let Some(publication) = existing.filter(|_| !missing) {
             let mut edit = s::EditMessage::new()
-                .content(&plan.document.text)
+                .content(&document.text)
                 .embeds(embeds)
                 .allowed_mentions(s::CreateAllowedMentions::new());
             if plan.kind == "links" {
                 edit = edit.components(components);
+            }
+            if let Some(attachments) = attachments {
+                edit = edit.attachments(attachments);
             }
             plan.channel
                 .edit_message(http, publication.message, edit)
                 .await?
         } else {
             let mut create = s::CreateMessage::new()
-                .content(&plan.document.text)
+                .content(&document.text)
                 .embeds(embeds)
                 .allowed_mentions(s::CreateAllowedMentions::new());
             if plan.kind == "links" {
                 create = create.components(components);
+            }
+            if plan.kind == "announcements" {
+                for file in request.image.files() {
+                    create = create.add_file(file);
+                }
             }
             plan.channel.send_message(http, create).await?
         };
@@ -246,9 +416,12 @@ pub async fn execute(
             },
         );
         if plan.kind == "announcements" {
-            state
-                .documents
-                .insert(plan.key.clone(), plan.document.clone());
+            if let Some(image) = media::published(document, &message)? {
+                state.announcement_images.insert(plan.key.clone(), image);
+            } else {
+                state.announcement_images.remove(&plan.key);
+            }
+            state.documents.insert(plan.key.clone(), document.clone());
         }
         if plan.kind == "links" {
             if let Some(invite) = invite {
@@ -268,8 +441,13 @@ pub async fn execute(
         ))
     } else {
         let publication = &state.publications[&plan.key];
+        let recovery = if missing {
+            "A mensagem anterior foi apagada. Uma nova publicação foi criada e o ID anterior foi arquivado.\n"
+        } else {
+            ""
+        };
         Ok(format!(
-            "Conteúdo publicado; estado salvo nesta guilda. Identificador: `{}`\nMessage ID: `{}`\n[Ver mensagem]({})",
+            "{recovery}Conteúdo publicado; estado salvo nesta guilda. Identificador: `{}`\nMessage ID: `{}`\n[Ver mensagem]({})",
             plan.key,
             publication.message,
             super::announcements::message_link(guild, publication)

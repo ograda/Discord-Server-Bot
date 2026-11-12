@@ -119,7 +119,7 @@ fn single_description_preserves_style_spacing_labels_markdown_and_invite_last() 
     assert_eq!(embed["title"], doc.title);
     assert_eq!(
         embed["description"],
-        "Introdução\ncom quebra interna\n\n**📱 Grupo do WhatsApp — [Entrar no grupo](<https://chat.whatsapp.com/EXEMPLO>)**\nParticipe.\nOutra linha.\n\n**site — [Abrir link](<http://example.org>)**\n\n**🎮 Convite do Discord — Copiar convite ↓**\nCompartilhe."
+        "Introdução\ncom quebra interna\n\n**📱 Grupo do WhatsApp — [Entrar no grupo](<https://chat.whatsapp.com/EXEMPLO>)**\nParticipe.\nOutra linha.\n\n**site — [Abrir link](<http://example.org>)**\n\n**🎮 Convite do Discord — [Link do convite](<https://discord.gg/EXEMPLO>)**\nCompartilhe."
     );
     assert_eq!(doc, before); // No TOML or configured order mutation.
     let icon = "https://cdn.discordapp.com/icons/1/icon.png";
@@ -237,8 +237,10 @@ fn invitation_components_and_private_response_use_configured_url_without_clipboa
     assert_eq!(buttons[0]["custom_id"], "links-copy:1");
     assert_eq!(buttons[0]["label"], "📋 Copiar convite");
     assert!(buttons[0].get("url").is_none());
-    assert_eq!(buttons[1]["style"], 5);
-    assert_eq!(buttons[1]["url"], doc.entries[0].url);
+    assert_eq!(buttons[1]["style"], 2);
+    assert_eq!(buttons[1]["custom_id"], links::INVITE_FRIENDS_ID);
+    assert_eq!(buttons[1]["label"], "🎮 Convidar amigos");
+    assert!(buttons[1].get("url").is_none());
     let response =
         serde_json::to_value(links::copy_response(&doc.entries[0].url).unwrap()).unwrap();
     assert_eq!(response["flags"], 64);
@@ -250,6 +252,36 @@ fn invitation_components_and_private_response_use_configured_url_without_clipboa
     let mut doc = doc;
     doc.entries.remove(0);
     assert!(links::invite_components(&doc, "unused").unwrap().is_empty());
+}
+#[test]
+fn invite_friends_routes_to_exact_ephemeral_response_without_session_or_permissions() {
+    let custom_id = "links-invite-friends";
+    assert!(links::handles_invite_component(custom_id));
+    let response =
+        serde_json::to_value(links::invite_friends_response(custom_id).unwrap()).unwrap();
+    assert_eq!(response["flags"], 64);
+    assert_eq!(
+        response["content"],
+        "Lembra o besta do Ograda que essa funcionalidade ainda não está disponível"
+    );
+    assert_eq!(response["allowed_mentions"]["parse"], json!([]));
+    assert!(
+        response
+            .get("components")
+            .is_none_or(|v| v.as_array().unwrap().is_empty())
+    );
+    assert!(links::invite_friends_response("links-copy:123").is_none());
+    assert!(links::handles_invite_component("links-copy:123"));
+    assert!(!links::handles_invite_component("unrelated"));
+    // Identical across publications and restarts; no collector or transient state is needed.
+    for operation in [123, 456] {
+        let rows = serde_json::to_value(
+            links::invite_components(&document(), &format!("links-copy:{operation}")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rows[0]["components"][1]["custom_id"], custom_id);
+        assert!(rows[0]["components"][1].get("url").is_none());
+    }
 }
 #[test]
 fn persistent_copy_button_checks_publication_origin_and_survives_restart() {

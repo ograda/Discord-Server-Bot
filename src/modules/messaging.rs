@@ -1,3 +1,4 @@
+use crate::services::announcements::media::{self, ImageChange};
 use crate::{
     core::{Context, Error, permissions},
     services::{announcements, publishing, storage},
@@ -17,6 +18,10 @@ pub async fn announce(
     #[description = "Canal de destino; padrão: announcements configurado"] canal: Option<
         s::GuildChannel,
     >,
+    #[description = "Imagem opcional enviada como anexo (PNG, JPEG, WebP ou GIF)"] imagem: Option<
+        s::Attachment,
+    >,
+    #[description = "URL externa alternativa ao upload"] url_imagem: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
     let cfg = permissions::guild_config(ctx)?;
@@ -30,22 +35,33 @@ pub async fn announce(
         }
         None => cfg.channel("announcements")?,
     };
-    publishing::authorize_channel(ctx, "announcements", channel, true).await?;
+    let target = publishing::authorize_channel(ctx, "announcements", channel, true).await?;
+    if imagem.is_some() {
+        publishing::authorize_attachment(ctx, &target).await?;
+    }
     let base = storage::template(
         &ctx.data().templates,
         cfg,
         "announcements",
         &Default::default(),
     )?;
-    let doc = announcements::with_message(&base, &mensagem)?;
-    let message = channel
-        .send_message(
-            ctx.http(),
-            s::CreateMessage::new()
-                .embeds(doc.embeds("announcements")?)
-                .allowed_mentions(s::CreateAllowedMentions::new()),
-        )
-        .await?;
+    let mut doc = announcements::with_message(&base, &mensagem)?;
+    let change = media::input(
+        None,
+        imagem.as_ref(),
+        url_imagem.as_deref(),
+        media::upload_limit(ctx),
+    )
+    .await?;
+    change.apply(&mut doc)?;
+    let doc = announcements::build(ctx.http(), cfg.guild_id, &doc).await?;
+    let mut send = s::CreateMessage::new()
+        .embeds(doc.embeds("announcements")?)
+        .allowed_mentions(s::CreateAllowedMentions::new());
+    if let ImageChange::Upload(upload) = change {
+        send = send.add_file(upload.attachment());
+    }
+    let message = channel.send_message(ctx.http(), send).await?;
     tracing::info!(guild = %cfg.guild_id, module = "announce", action = "send", stage = "complete", channel = %channel, message = %message.id, "Anúncio rápido enviado como embed");
     ctx.say(format!("Anúncio enviado em <#{channel}>.")).await?;
     Ok(())

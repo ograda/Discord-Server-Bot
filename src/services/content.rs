@@ -118,6 +118,12 @@ impl Document {
         ensure!(self.color <= 0xffffff, "Cor inválida");
         for url in [&self.thumbnail, &self.image] {
             if !url.is_empty() {
+                if kind == "announcements"
+                    && std::ptr::eq(url, &self.image)
+                    && super::announcements::media::attachment_filename(url).is_some()
+                {
+                    continue;
+                }
                 valid_url(url)?;
             }
         }
@@ -295,7 +301,10 @@ impl Document {
                 format!("{} {}", entry.emoji, entry.title)
             };
             let action = if entry.is_discord_invite()? {
-                "Copiar convite ↓".into()
+                format!(
+                    "[Link do convite](<{}>)",
+                    entry.url.replace('>', "%3E").replace('<', "%3C")
+                )
             } else {
                 let label = entry
                     .label
