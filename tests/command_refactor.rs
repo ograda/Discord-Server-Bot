@@ -760,10 +760,14 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
         } else {
             "rules"
         };
-        let doc = Document {
-            title: "Original".into(),
-            description: "Body".into(),
-            ..Default::default()
+        let doc = if kind == "rules" {
+            toml::from_str(include_str!("../templates/global/rules/default.toml")).unwrap()
+        } else {
+            Document {
+                title: "Original".into(),
+                description: "Body".into(),
+                ..Default::default()
+            }
         };
         let mut plan = Plan {
             operation: 123,
@@ -831,6 +835,15 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
             serde_json::json!([])
         );
         assert_eq!(records[2].1["embeds"][0]["title"], "Updated");
+        if kind == "rules" {
+            for request in [&records[0], &records[2]] {
+                assert_eq!(request.1["embeds"].as_array().unwrap().len(), 1);
+                assert_eq!(
+                    request.1["embeds"][0]["fields"].as_array().unwrap().len(),
+                    10
+                );
+            }
+        }
         assert!(!store.read(gid).unwrap().publications.contains_key(key));
         assert!(
             store

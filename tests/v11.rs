@@ -128,15 +128,15 @@ fn channel_overwrites_and_role_hierarchy_are_enforced() {
     assert!(ensure_bot_channel_permissions(&auth, &channel, send).is_err());
 }
 #[test]
-fn rules_have_two_purple_embeds_and_five_fields_each() {
+fn rules_have_one_purple_embed_with_all_ten_rules() {
     let doc: Document =
         toml::from_str(include_str!("../templates/global/rules/default.toml")).unwrap();
     let embeds = doc.embeds("rules").unwrap();
     let json = serde_json::to_value(embeds).unwrap();
-    assert_eq!(json.as_array().unwrap().len(), 2);
+    assert_eq!(json.as_array().unwrap().len(), 1);
     for embed in json.as_array().unwrap() {
         assert_eq!(embed["color"], 0x5865f2);
-        assert_eq!(embed["fields"].as_array().unwrap().len(), 5);
+        assert_eq!(embed["fields"].as_array().unwrap().len(), 10);
     }
     assert!(
         json[0]["description"]
@@ -145,7 +145,7 @@ fn rules_have_two_purple_embeds_and_five_fields_each() {
             .contains("Bem-vindo")
     );
     assert!(
-        json[1]["footer"]["text"]
+        json[0]["footer"]["text"]
             .as_str()
             .unwrap()
             .contains("moderação")
@@ -170,7 +170,7 @@ fn embed_limits_and_variable_rule_count() {
             .collect(),
         ..Default::default()
     };
-    assert_eq!(doc.embeds("rules").unwrap().len(), 3);
+    assert_eq!(doc.embeds("rules").unwrap().len(), 1);
     doc.entries[0].description = "x".repeat(1025);
     assert!(doc.embeds("rules").is_err());
     doc.entries[0].description = "x".repeat(1000);
@@ -181,6 +181,44 @@ fn embed_limits_and_variable_rule_count() {
     doc.entries.clear();
     doc.text = "😀".repeat(1001);
     assert!(doc.embeds("rules").is_err());
+}
+#[test]
+fn rules_single_embed_limit_does_not_change_links_pagination() {
+    let mut doc = Document {
+        title: "Coleção".into(),
+        entries: (0..25)
+            .map(|n| Entry {
+                id: format!("entry-{n}"),
+                title: format!("Item {n}"),
+                description: "Descrição".into(),
+                url: "https://example.org".into(),
+                order: n,
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let rules = serde_json::to_value(doc.embeds("rules").unwrap()).unwrap();
+    assert_eq!(rules.as_array().unwrap().len(), 1);
+    assert_eq!(rules[0]["fields"].as_array().unwrap().len(), 25);
+    assert!(
+        rules[0]["fields"][24]["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("25.")
+    );
+    assert_eq!(doc.embeds("links").unwrap().len(), 5);
+    doc.entries.push(Entry {
+        id: "entry-25".into(),
+        ..doc.entries[0].clone()
+    });
+    assert!(
+        doc.embeds("rules")
+            .unwrap_err()
+            .to_string()
+            .contains("25 campos")
+    );
+    assert_eq!(doc.embeds("links").unwrap().len(), 6);
 }
 #[test]
 fn validates_links_and_suppresses_mentions() {

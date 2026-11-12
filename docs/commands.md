@@ -20,6 +20,9 @@ substituída silenciosamente: selecione explicitamente outra permitida.
 ## Rules
 
 `/rules` mostra os embeds atualmente em memória, em privado, sem botões de edição.
+Todas as regras ficam em um único embed, com título e rodapé únicos, também na
+publicação. Até 25 regras/campos e 6000 caracteres totais são aceitos; conteúdo
+excessivo é rejeitado antes de publicar, sem truncar nem dividir em outros blocos.
 Altere `config/guilds/<nome>/rules.toml` e execute `/rules ação:update` para validar
 e recarregar. O bot informa o arquivo específico e os defaults usados; se houver
 erro, preserva o snapshot anterior. Update não altera nenhuma mensagem pública.

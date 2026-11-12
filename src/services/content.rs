@@ -78,7 +78,16 @@ impl Document {
                 valid_url(&entry.url)?;
             }
         }
-        let count = entries.len().div_ceil(5).max(1);
+        let fields_per_embed = if kind == "rules" {
+            ensure!(
+                entries.len() <= 25,
+                "Regras excedem 25 campos; reduza a quantidade para publicar em um único embed"
+            );
+            25
+        } else {
+            5
+        };
+        let count = entries.len().div_ceil(fields_per_embed).max(1);
         ensure!(count <= 10, "Máximo de 50 seções / 10 embeds");
         if self.title.is_empty() && self.description.is_empty() && entries.is_empty() {
             ensure!(!self.text.trim().is_empty(), "Mensagem vazia");
@@ -99,8 +108,13 @@ impl Document {
                     embed = embed.image(&self.image);
                 }
             }
-            for (offset, entry) in entries.iter().skip(index * 5).take(5).enumerate() {
-                let number = index * 5 + offset + 1;
+            for (offset, entry) in entries
+                .iter()
+                .skip(index * fields_per_embed)
+                .take(fields_per_embed)
+                .enumerate()
+            {
+                let number = index * fields_per_embed + offset + 1;
                 let prefix = if kind == "rules" {
                     ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
                         .get(number - 1)
