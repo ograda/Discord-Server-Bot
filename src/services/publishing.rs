@@ -82,7 +82,7 @@ pub async fn preview(ctx: Context<'_>, plan: Plan) -> Result<(), Error> {
     ctx.say(result).await?;
     Ok(())
 }
-async fn commit(ctx: Context<'_>, plan: &Plan) -> Result<String, Error> {
+pub(crate) async fn commit(ctx: Context<'_>, plan: &Plan) -> Result<String, Error> {
     let cfg = permissions::guild_config(ctx)?;
     let guild = cfg.guild_id;
     permissions::action(ctx, plan.kind_to_root(), &plan.action)?;
@@ -131,6 +131,19 @@ pub async fn execute(
     plan: &Plan,
 ) -> Result<String, Error> {
     let embeds = plan.document.embeds(plan.kind)?;
+    let invite = if plan.kind == "links" {
+        super::links::published_invite(&plan.document, plan.operation)?
+    } else {
+        None
+    };
+    let components = if plan.kind == "links" {
+        super::links::invite_components(
+            &plan.document,
+            invite.as_ref().map_or("", |i| i.custom_id.as_str()),
+        )?
+    } else {
+        vec![]
+    };
     let _guard = store.gate.lock().await;
     let mut state = store.read(guild)?;
     ensure!(
@@ -197,31 +210,33 @@ pub async fn execute(
             }
         }
         state.publications.remove(&plan.key);
+        if plan.kind == "links" {
+            state.link_invites.remove(&plan.key);
+        }
         if plan.kind == "announcements" {
             state.documents.remove(&plan.key);
         }
     } else {
         let message = if let Some(publication) = existing {
+            let mut edit = s::EditMessage::new()
+                .content(&plan.document.text)
+                .embeds(embeds)
+                .allowed_mentions(s::CreateAllowedMentions::new());
+            if plan.kind == "links" {
+                edit = edit.components(components);
+            }
             plan.channel
-                .edit_message(
-                    http,
-                    publication.message,
-                    s::EditMessage::new()
-                        .content(&plan.document.text)
-                        .embeds(embeds)
-                        .allowed_mentions(s::CreateAllowedMentions::new()),
-                )
+                .edit_message(http, publication.message, edit)
                 .await?
         } else {
-            plan.channel
-                .send_message(
-                    http,
-                    s::CreateMessage::new()
-                        .content(&plan.document.text)
-                        .embeds(embeds)
-                        .allowed_mentions(s::CreateAllowedMentions::new()),
-                )
-                .await?
+            let mut create = s::CreateMessage::new()
+                .content(&plan.document.text)
+                .embeds(embeds)
+                .allowed_mentions(s::CreateAllowedMentions::new());
+            if plan.kind == "links" {
+                create = create.components(components);
+            }
+            plan.channel.send_message(http, create).await?
         };
         state.publications.insert(
             plan.key.clone(),
@@ -234,6 +249,13 @@ pub async fn execute(
             state
                 .documents
                 .insert(plan.key.clone(), plan.document.clone());
+        }
+        if plan.kind == "links" {
+            if let Some(invite) = invite {
+                state.link_invites.insert(plan.key.clone(), invite);
+            } else {
+                state.link_invites.remove(&plan.key);
+            }
         }
     }
     state.pending = None;

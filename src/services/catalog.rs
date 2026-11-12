@@ -209,9 +209,44 @@ impl Catalog {
         board_id: &str,
         entry: Entry,
     ) -> Result<(String, Option<PathBuf>)> {
-        ensure!(config::registry::valid_alias(&entry.id), "Link ID inválido");
-        super::content::valid_url(&entry.url)?;
+        self.change_links(root, guild, board_id, LinkChange::Add(entry))
+            .await
+    }
+    pub async fn remove_link(
+        &self,
+        root: &Path,
+        guild: &GuildConfig,
+        board_id: &str,
+        expected: Entry,
+    ) -> Result<(String, Option<PathBuf>)> {
+        self.change_links(root, guild, board_id, LinkChange::Remove(expected))
+            .await
+    }
+    pub async fn edit_board(
+        &self,
+        root: &Path,
+        guild: &GuildConfig,
+        board_id: &str,
+        expected: Document,
+        updated: Document,
+    ) -> Result<(String, Option<PathBuf>)> {
+        self.change_links(
+            root,
+            guild,
+            board_id,
+            LinkChange::Board { expected, updated },
+        )
+        .await
+    }
+    async fn change_links(
+        &self,
+        root: &Path,
+        guild: &GuildConfig,
+        board_id: &str,
+        change: LinkChange,
+    ) -> Result<(String, Option<PathBuf>)> {
         let (defaults, target) = paths(root, guild, "links")?;
+        let original = read_optional_bytes(&target)?;
         let (value, _) = read_content(root, guild, "links")?;
         let mut effective = parse_links(value)?;
         let board = effective
@@ -219,53 +254,72 @@ impl Catalog {
             .iter_mut()
             .find(|b| b.id == board_id)
             .context("Quadro não encontrado no TOML; execute Update e selecione novamente")?;
-        ensure!(
-            !board.links.iter().any(|v| v.id == entry.id),
-            "Link ID já existe neste quadro"
-        );
-        board.links.push(entry.clone());
+        let previous = board.clone();
+        match &change {
+            LinkChange::Add(entry) => {
+                entry.validate_link()?;
+                ensure!(
+                    !board.links.iter().any(|v| v.id == entry.id),
+                    "Link ID já existe neste quadro"
+                );
+                board.links.push(entry.clone());
+            }
+            LinkChange::Remove(expected) => {
+                let entry = board
+                    .links
+                    .iter()
+                    .find(|v| v.id == expected.id)
+                    .context("Link já removido do TOML; recarregue o catálogo")?;
+                ensure!(
+                    entry == expected,
+                    "Link alterado desde a seleção; confira e confirme novamente"
+                );
+                board.links.retain(|v| v.id != expected.id);
+            }
+            LinkChange::Board { expected, updated } => {
+                ensure!(
+                    board.document() == *expected,
+                    "Quadro alterado no disco; execute Update antes de editar novamente"
+                );
+                ensure!(
+                    expected.entries == updated.entries,
+                    "A edição do quadro não pode substituir seu catálogo de links"
+                );
+                let id = board.id.clone();
+                let channel = board.channel.clone();
+                *board = Board::from_document(updated.clone());
+                board.id = id;
+                board.channel = channel;
+            }
+        }
         effective.validate(guild)?;
-        let original = read_optional_bytes(&target)?;
         let raw = match &original {
             Some(bytes) => String::from_utf8(bytes.clone()).context("links.toml não é UTF-8")?,
-            None => fs::read_to_string(&defaults).unwrap_or_default(),
+            None => match fs::read_to_string(&defaults) {
+                Ok(text) => text,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => return Err(e.into()),
+            },
         };
         let mut edit: toml_edit::DocumentMut = raw
             .parse()
             .context("links.toml inválido; nenhuma gravação realizada")?;
-        let entry_table = toml_edit::ser::to_document(&entry)?.as_table().clone();
         if let Some(boards) = edit
             .get_mut("boards")
             .and_then(|v| v.as_array_of_tables_mut())
         {
-            if let Some(board) = boards
+            let table = boards
                 .iter_mut()
                 .find(|v| v.get("id").and_then(|id| id.as_str()) == Some(board_id))
-            {
-                let key = if board.contains_key("entries") {
-                    "entries"
-                } else {
-                    "links"
-                };
-                append_entry(board, key, entry_table);
+                .context("Quadro não encontrado no arquivo específico")?;
+            let key = if table.contains_key("entries") {
+                "entries"
             } else {
-                anyhow::bail!("Quadro não encontrado no arquivo específico");
-            }
+                "links"
+            };
+            change_table(table, key, &previous, &change)?;
         } else if board_id == "default" && edit.get("boards").is_none() {
-            if edit.get("entries").is_none() {
-                let previous = &effective
-                    .boards
-                    .iter()
-                    .find(|b| b.id == board_id)
-                    .unwrap()
-                    .links;
-                let mut entries = toml_edit::ArrayOfTables::new();
-                for link in &previous[..previous.len() - 1] {
-                    entries.push(toml_edit::ser::to_document(link)?.as_table().clone());
-                }
-                edit["entries"] = toml_edit::Item::ArrayOfTables(entries);
-            }
-            append_entry(edit.as_table_mut(), "entries", entry_table);
+            change_table(edit.as_table_mut(), "entries", &previous, &change)?;
         } else {
             let serialized = toml_edit::ser::to_document(&effective)?;
             for key in [
@@ -283,9 +337,8 @@ impl Catalog {
             edit["boards"] = serialized["boards"].clone();
         }
         let updated = edit.to_string();
-        let candidate: toml::Value = toml::from_str(&updated)?;
         let mut defaults_value = config::loader::optional(&defaults)?;
-        merge_content(&mut defaults_value, candidate, "links");
+        merge_content(&mut defaults_value, toml::from_str(&updated)?, "links");
         let links = parse_links(defaults_value)?;
         links.validate(guild)?;
         let backup = atomic_write(&target, updated.as_bytes(), Some(original.as_deref()))?;
@@ -300,21 +353,80 @@ impl Catalog {
         Ok((source, backup))
     }
 }
-fn append_entry(table: &mut toml_edit::Table, key: &str, entry: toml_edit::Table) {
-    if let Some(entries) = table.get_mut(key).and_then(|v| v.as_array_of_tables_mut()) {
-        entries.push(entry);
-    } else {
-        let mut entries = toml_edit::ArrayOfTables::new();
-        if let Some(array) = table.get(key).and_then(|v| v.as_array()) {
-            for value in array {
-                if let Some(v) = value.as_inline_table() {
-                    entries.push(v.clone().into_table());
-                }
-            }
+enum LinkChange {
+    Add(Entry),
+    Remove(Entry),
+    Board {
+        expected: Document,
+        updated: Document,
+    },
+}
+fn change_table(
+    table: &mut toml_edit::Table,
+    key: &str,
+    previous: &Board,
+    change: &LinkChange,
+) -> Result<()> {
+    if let LinkChange::Board { updated, .. } = change {
+        let serialized = toml_edit::ser::to_document(updated)?;
+        for key in [
+            "title",
+            "description",
+            "color",
+            "thumbnail",
+            "image",
+            "footer",
+            "text",
+        ] {
+            table[key] = serialized[key].clone();
         }
-        entries.push(entry);
-        table[key] = toml_edit::Item::ArrayOfTables(entries);
+        return Ok(());
     }
+    // Missing arrays inherit defaults. Materialize before editing so inherited links survive.
+    let mut entries = if let Some(array) = table.get(key).and_then(|v| v.as_array_of_tables()) {
+        array.clone()
+    } else if let Some(array) = table.get(key).and_then(|v| v.as_array()) {
+        let mut tables = toml_edit::ArrayOfTables::new();
+        for value in array {
+            tables.push(
+                value
+                    .as_inline_table()
+                    .context("Entrada de link TOML inválida")?
+                    .clone()
+                    .into_table(),
+            );
+        }
+        tables
+    } else {
+        let mut tables = toml_edit::ArrayOfTables::new();
+        for entry in &previous.links {
+            tables.push(toml_edit::ser::to_document(entry)?.as_table().clone());
+        }
+        tables
+    };
+    match change {
+        LinkChange::Add(entry) => {
+            entries.push(toml_edit::ser::to_document(entry)?.as_table().clone())
+        }
+        LinkChange::Remove(entry) => {
+            let mut retained = toml_edit::ArrayOfTables::new();
+            for table in entries
+                .iter()
+                .filter(|t| t.get("id").and_then(|v| v.as_str()) != Some(entry.id.as_str()))
+            {
+                retained.push(table.clone());
+            }
+            entries = retained;
+        }
+        LinkChange::Board { .. } => unreachable!(),
+    }
+    // An explicit empty array must shadow inherited entries after removal of the last link.
+    table[key] = if entries.is_empty() {
+        toml_edit::value(toml_edit::Array::new())
+    } else {
+        toml_edit::Item::ArrayOfTables(entries)
+    };
+    Ok(())
 }
 fn replace(
     snapshot: &mut Snapshot,

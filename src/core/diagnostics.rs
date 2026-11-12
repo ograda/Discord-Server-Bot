@@ -9,6 +9,15 @@ pub fn action(ctx: Context<'_>) -> String {
             .iter()
             .find(|a| a.name == "ação" || a.name == "modo")
     {
+        if let s::ResolvedValue::String(value) = arg.value
+            && command
+                .parameters
+                .iter()
+                .find(|p| p.name == arg.name)
+                .is_some_and(|p| p.choices.iter().any(|c| c.name == value))
+        {
+            return value.into();
+        }
         if let s::ResolvedValue::Integer(index) = arg.value
             && let Some(choice) = usize::try_from(index).ok().and_then(|i| {
                 command

@@ -48,7 +48,7 @@ pub const COMMANDS: &[&str] = &[
 pub fn default_action(root: &str) -> Option<&'static str> {
     match root {
         "ping" => Some("simples"),
-        "rules" | "links" => Some("preview"),
+        "rules" => Some("preview"),
         "announcement" => Some("create"),
         "profile" => Some("revert"),
         _ => None,
@@ -215,6 +215,22 @@ pub fn remote_commands(
                     .filter_map(|p| {
                         if p.name != "ação" && p.name != "modo" {
                             return p.create_as_slash_command_option();
+                        }
+                        if command.name == "links" && p.name == "ação" {
+                            let mut option = poise::serenity_prelude::CreateCommandOption::new(
+                                poise::serenity_prelude::CommandOptionType::String,
+                                &p.name,
+                                "Operação obrigatória do catálogo de Links",
+                            )
+                            .required(true);
+                            for choice in &p.choices {
+                                if guild
+                                    .command_enabled(&format!("links.{}", choice.name), defaults)
+                                {
+                                    option = option.add_string_choice(&choice.name, &choice.name);
+                                }
+                            }
+                            return Some(option);
                         }
                         let choices = std::mem::take(&mut p.choices);
                         let mut option = p.create_as_slash_command_option()?;

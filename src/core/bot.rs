@@ -87,13 +87,16 @@ pub async fn run(token: String, config: Config) -> Result<(), Error> {
                     }
                 })
             },
-            event_handler: |_, event, _, _| {
+            event_handler: |ctx, event, _, data| {
                 Box::pin(async move {
                     match event {
                         s::FullEvent::Ready { data_about_bot } => {
                             tracing::info!(bot = %data_about_bot.user.id, "Conectado ao Discord")
                         }
                         s::FullEvent::Resume { .. } => tracing::info!("Sessão Discord retomada"),
+                        s::FullEvent::InteractionCreate { interaction: s::Interaction::Component(component) } if component.data.custom_id.starts_with("links-copy:") => {
+                            crate::services::links::handle_copy(ctx, component, data).await?;
+                        }
                         _ => {}
                     }
                     Ok(())

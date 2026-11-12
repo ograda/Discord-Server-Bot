@@ -17,6 +17,8 @@ pub struct Publication {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct State {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub link_invites: HashMap<String, crate::services::links::PublishedInvite>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub role_operations: HashMap<String, crate::services::roles::Report>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archived_documents: Vec<ArchivedDocument>,

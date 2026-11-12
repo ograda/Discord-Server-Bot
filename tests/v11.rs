@@ -203,7 +203,7 @@ fn embed_limits_and_variable_rule_count() {
     assert!(doc.embeds("rules").is_err());
 }
 #[test]
-fn rules_single_embed_limit_does_not_change_links_pagination() {
+fn rules_and_links_render_one_embed_for_many_entries() {
     let mut doc = Document {
         title: "Coleção".into(),
         entries: (0..25)
@@ -226,7 +226,7 @@ fn rules_single_embed_limit_does_not_change_links_pagination() {
             .unwrap()
             .contains("**25. Item 24**\nDescrição")
     );
-    assert_eq!(doc.embeds("links").unwrap().len(), 5);
+    assert_eq!(doc.embeds("links").unwrap().len(), 1);
     doc.entries.push(Entry {
         id: "entry-25".into(),
         title: "Item 25".into(),
@@ -241,7 +241,7 @@ fn rules_single_embed_limit_does_not_change_links_pagination() {
             .unwrap()
             .contains("**26. Item 25**\nDescrição")
     );
-    assert_eq!(doc.embeds("links").unwrap().len(), 6);
+    assert_eq!(doc.embeds("links").unwrap().len(), 1);
 }
 #[test]
 fn rules_description_controls_spacing_preserves_internal_breaks_and_sorted_content() {
@@ -393,7 +393,7 @@ fn slash_groups_expose_all_expected_operations() {
                     command
                         .parameters
                         .iter()
-                        .any(|p| !p.required && !p.choices.is_empty())
+                        .any(|p| p.required == (command.name == "links") && !p.choices.is_empty())
                 );
             }
         }

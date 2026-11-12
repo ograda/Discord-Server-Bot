@@ -12,6 +12,7 @@ JSON existente. Não há banco, scheduler, webhooks, painel ou serviço adiciona
 - `services/catalog`: snapshots mutáveis somente de Rules/Links, com recarga explícita.
 - `services/publishing`: prévia/confirmar e transação de publicação da mensagem original.
 - `services/announcements`: construtor de mensagem, chaves, seleção e links gerenciados.
+- `services/links`: choices STRING, seleção de entradas e handler persistente dos botões de convite.
 - `services/profile`: download/decodificação, Data URI, REST por guilda e persistência.
 - `services/storage`: lock entre processos, mutex, revisão, journal e snapshots JSON.
 - `services/ui`: confirmações de uso único, menus paginados e abertura de formulários.
@@ -30,7 +31,7 @@ configuração geral, módulos, canais e comandos continuam exigindo reinicializ
 Profile Revert lê novamente somente os defaults de perfil.
 
 Reset valida o arquivo compartilhado antes de copiar seus bytes para a guilda.
-Links Add usa `toml_edit` para preservar comentários e estrutura quando possível,
+Links Add, Remove de entrada e edição de apresentação usam `toml_edit` para preservar comentários e estrutura quando possível,
 valida o arquivo efetivo resultante, cria backup exato e usa arquivo temporário
 no mesmo diretório + rename atômico. Comentários em arrays inline normalizados
 podem mudar; o backup mantém os bytes anteriores. O mutex de `Store` serializa
@@ -45,6 +46,9 @@ Choices opcionais permitem executar a raiz com a ação padrão. Parâmetros
 condicionais são opcionais no esquema e validados por ação no runtime.
 Role e Role-all exigem ação explícita e seletores nativos; não têm ação padrão
 nem subcomandos. Role recebe USER/ROLE, enquanto Role-all recebe somente ROLE.
+Links também exige ação explícita: STRING com choices, mais `id` opcional usado
+somente em Remove. Seu registro por guilda filtra valores STRING sem convertê-los
+em índices numéricos. Add usa modal de cinco campos e confirmação privada.
 
 Flags de raiz, flags de ação, módulo e status da guilda são considerados no
 registro e na execução. Choices por guilda preservam seus índices originais do
@@ -78,7 +82,16 @@ A transação busca a mensagem existente, verifica autoria e canal, grava `pendi
 faz POST/PATCH/DELETE e então salva a referência/revisão e limpa o journal.
 PATCH preserva o Message ID. Uma confirmação repetida/obsoleta não repete o envio.
 Erro de transporte mantém `pending` para evitar duplicação. Remove pode reconciliar
-uma mensagem já ausente (404) após confirmação; Publish preserva os IDs nesse caso.
+uma mensagem já ausente (404) em Rules/Announcement após confirmação; Publish
+preserva os IDs nesse caso. Links Remove exclui somente uma entrada do TOML;
+não usa a transação de exclusão da publicação.
+
+Preview e Publish de Links usam a mesma descrição única em `services/content`.
+O convite principal é movido apenas na renderização para o final. Botões públicos
+são processados por `InteractionCreate`, independentemente dos collectors privados
+e da autorização administrativa. `state.link_invites` guarda o identificador e a
+URL da última publicação confirmada; a validação usa também guilda/canal/mensagem
+e autoria. Esses dados operacionais sobrevivem ao restart, sem sobrepor o TOML.
 
 Anúncios gerenciados conservam seus documentos e chaves `announcement-<interaction>`.
 O envio rápido usa o mesmo estilo de embed e não cria um anúncio gerenciado.

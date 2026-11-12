@@ -103,6 +103,14 @@ são aliases em `config.toml`, não Message IDs. O formato legado `[[entries]]`
 continua aceito como quadro `default`. O JSON guarda referências independentes
 por quadro; não troca canal/guilda arbitrariamente durante uma edição.
 
+Links exige `ação`; seu único parâmetro opcional `id` identifica links em Remove.
+O quadro é escolhido por menu quando não houver único quadro ou `default`.
+Add/Remove e edição de apresentação gravam somente o TOML específico, com backup;
+um catálogo herdado é materializado antes da alteração. Remove preserva as outras
+entradas e as referências de publicação. `state.link_invites` mantém apenas os
+dados operacionais do botão da publicação confirmada da própria guilda. Veja o
+[guia de Links](links.md) para o modal e convites.
+
 ## JSON e backups
 
 `state.json` permanece por Guild ID. Armazena publicações, revisão, journal,

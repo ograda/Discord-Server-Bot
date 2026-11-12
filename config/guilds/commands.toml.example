@@ -1,11 +1,20 @@
 # Copie para config/guilds/<nome>/commands.toml; inclua somente diferenças.
 [commands]
 role = true
+links = true # Ação sempre obrigatória; id opcional é usado apenas em Remove.
 role-all = false # Habilite explicitamente para operações em massa confirmadas.
 # rules = false # desabilita o comando inteiro nesta guilda
 
 [actions.rules]
 publish = false
+
+[actions.links]
+preview = true
+publish = true
+update = true
+reset = true
+add = true
+remove = true # Remove somente o link selecionado do TOML específico.
 
 [actions.announcement]
 remove = false

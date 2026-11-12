@@ -6,7 +6,7 @@ O objetivo é evoluir administração, automações e integrações incrementalm
 
 ## V1.1 — interface simplificada
 
-Oito comandos raiz, com escolhas nativas em `ação`. `/role` e `/role-all` exigem
+Oito comandos raiz, com escolhas nativas em `ação`. `/role`, `/role-all` e `/links` exigem
 ação explícita; os demais comandos com ação têm um padrão. Não há subcomandos
 nativos. As respostas administrativas são efêmeras.
 
@@ -16,7 +16,7 @@ nativos. As respostas administrativas são efêmeras.
 | `/role` | Ação obrigatória | `ação:add/remove`, `usuário` USER e `cargo` ROLE obrigatórios |
 | `/role-all` | Ação obrigatória, com confirmação | `ação:add/remove`, `cargo` ROLE; humanos elegíveis |
 | `/rules` | Prévia privada | `ação:publish`, `update`, `reset`, `remove` |
-| `/links` | Prévia do quadro; menu se houver vários | `ação:publish`, `update`, `reset`, `add`, `remove` |
+| `/links` | Ação obrigatória; somente `id` opcional | `ação:preview`, `publish`, `update`, `reset`, `add`, `remove` |
 | `/announcement` | Criar anúncio por mensagem ou formulário | `ação:edit`, `remove`; seleção/autocomplete |
 | `/announce` | Envia embed para announcements | `mensagem` obrigatória, `canal` opcional |
 | `/profile` | Confirma restauração do perfil TOML | `ação:nickname`, `bio`, `avatar` |
@@ -24,7 +24,13 @@ nativos. As respostas administrativas são efêmeras.
 **Update recarrega TOML em memória; Publish exige confirmação para modificar o
 Discord.** Reset confirma, preserva backup do arquivo específico e restaura o
 arquivo compartilhado, sem publicar. Links Add grava no TOML e atualiza a memória.
-Remove apaga somente a publicação selecionada; os TOMLs continuam disponíveis.
+Em Links, Remove exclui somente um link do TOML específico, após confirmação;
+preserva o quadro e sua publicação. Nos demais módulos, Remove apaga a publicação selecionada.
+
+Links Add usa um modal de cinco campos e confirma antes de salvar. Cada quadro
+usa um único embed, com legenda `label` opcional e convite Discord por último.
+Os botões permitem obter o convite privadamente ou abri-lo. Veja o
+[guia de Links e homologação](docs/links.md).
 
 Rules e Links usam TOML como fonte de conteúdo. Documentos antigos do JSON são
 preservados em backup e arquivados antes da descontinuação dessa precedência.

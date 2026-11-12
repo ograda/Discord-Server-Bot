@@ -5,11 +5,13 @@ id = "importantes"
 title = "🔗 Links Importantes"
 channel = "links" # alias de canal de config.toml, nunca Message ID
 color = 5793266
+description = "Aqui você encontra os principais links e grupos da nossa comunidade."
 
 [[boards.links]]
 id = "discord"
+kind = "discord_invite"
 title = "Convite da Comunidade"
-url = "https://discord.gg/XnxQ9q9VB"
+url = "https://discord.gg/EXEMPLO" # código ilustrativo; substitua pelo convite autorizado
 description = "Convide seus amigos para o servidor."
 emoji = "🎮"
 
@@ -19,6 +21,7 @@ title = "Warcraft Logs"
 url = "https://www.warcraftlogs.com/"
 description = "Logs e análises das raids."
 emoji = "📊"
+label = "Ver análises"
 
 [[boards]]
 id = "guias"

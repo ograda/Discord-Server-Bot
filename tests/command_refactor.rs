@@ -85,7 +85,7 @@ fn roots_native_roles_optional_choices_and_attachment_schema() {
                     .iter()
                     .find(|o| o["name"] == if name == "ping" { "modo" } else { "ação" })
                     .unwrap();
-                assert_eq!(choice["required"], false);
+                assert_eq!(choice["required"], name == "links");
                 assert!(!choice["choices"].as_array().unwrap().is_empty());
                 assert_eq!(choice["autocomplete"], false);
             }
@@ -124,7 +124,6 @@ fn roots_native_roles_optional_choices_and_attachment_schema() {
     );
     for (root, default) in [
         ("rules", "preview"),
-        ("links", "preview"),
         ("announcement", "create"),
         ("profile", "revert"),
         ("ping", "simples"),
@@ -242,12 +241,9 @@ fn guild_filters_preserve_choice_values_and_disabled_defaults_require_explicit_a
 #[test]
 fn conditional_parameters_reject_cross_action_arguments() {
     for (root, action, parameters) in [
-        (
-            "links",
-            "add",
-            vec!["quadro", "id", "titulo", "url", "descricao", "emoji"],
-        ),
-        ("links", "publish", vec!["quadro"]),
+        ("links", "add", vec!["id"]),
+        ("links", "publish", vec!["id"]),
+        ("links", "remove", vec!["id"]),
         ("announcement", "edit", vec!["mensagem", "identificador"]),
         ("profile", "avatar", vec!["imagem", "normalizar"]),
         ("profile", "nickname", vec!["apelido"]),
@@ -457,6 +453,133 @@ async fn links_legacy_partial_file_materializes_inherited_entries_without_losing
         fs::read_to_string(dir.path().join("guilds/One/links.toml"))
             .unwrap()
             .contains("# keep")
+    );
+}
+
+#[tokio::test]
+async fn links_remove_and_board_edit_preserve_comments_other_boards_publications_and_defaults() {
+    let dir = fixture();
+    let config = config::load(dir.path()).unwrap();
+    let one = config.guild("one").unwrap();
+    let catalog = Catalog::new(&config);
+    let store = Store::open(dir.path().join("data")).unwrap();
+    let mut state = State::default();
+    state.publications.insert(
+        "links:important".into(),
+        Publication {
+            channel: s::ChannelId::new(12),
+            message: s::MessageId::new(777),
+        },
+    );
+    store.write(one.guild_id, &state).unwrap();
+    let state_path = dir.path().join("data/guilds/1/state.json");
+    let before_state = fs::read(&state_path).unwrap();
+    let inherited = fs::read(dir.path().join("guilds/defaults/links.toml")).unwrap();
+    let original = catalog.snapshot(one.guild_id).await.unwrap().links.boards[0].clone();
+    let mut extra = link("new", "https://chat.whatsapp.com/EXEMPLO");
+    extra.label = Some("Entrar no grupo".into());
+    catalog
+        .add_link(&config.root, one, "important", extra.clone())
+        .await
+        .unwrap();
+    let target = dir.path().join("guilds/One/links.toml");
+    let before = fs::read_to_string(&target).unwrap();
+    assert!(before.contains("# Shared boards"));
+    assert!(before.contains("label = \"Entrar no grupo\""));
+    let (_, backup) = catalog
+        .remove_link(&config.root, one, "important", original.links[0].clone())
+        .await
+        .unwrap();
+    assert_eq!(fs::read(backup.unwrap()).unwrap(), before.as_bytes());
+    let current = catalog.snapshot(one.guild_id).await.unwrap().links.boards[0].document();
+    assert_eq!(current.entries, vec![extra.clone()]);
+    let mut edited = current.clone();
+    edited.title = "Edited title".into();
+    catalog
+        .edit_board(&config.root, one, "important", current, edited.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        catalog.snapshot(one.guild_id).await.unwrap().links.boards[0].document(),
+        edited
+    );
+    assert!(
+        fs::read_to_string(&target)
+            .unwrap()
+            .contains("# Shared boards")
+    );
+    catalog
+        .remove_link(&config.root, one, "important", extra)
+        .await
+        .unwrap();
+    let reloaded = config::load(dir.path()).unwrap();
+    let boards = reloaded.guild("one").unwrap().link_boards.as_ref().unwrap();
+    assert!(boards[0].links.is_empty());
+    assert_eq!(boards[1].id, "guides");
+    assert_eq!(fs::read(&state_path).unwrap(), before_state);
+    assert_eq!(
+        fs::read(dir.path().join("guilds/defaults/links.toml")).unwrap(),
+        inherited
+    );
+    assert!(!dir.path().join("guilds/Two/links.toml").exists());
+    assert_eq!(
+        catalog
+            .snapshot(s::GuildId::new(2))
+            .await
+            .unwrap()
+            .links
+            .boards[0],
+        original
+    );
+}
+
+#[tokio::test]
+async fn links_remove_legacy_inheritance_materializes_empty_array_and_rejects_stale_selection() {
+    let dir = fixture();
+    write(
+        dir.path(),
+        "guilds/defaults/links.toml",
+        "title='Legacy'\n[[entries]]\nid='site'\ntitle='Site'\nurl='https://example.org'\nlabel='Visitar'\n",
+    );
+    write(
+        dir.path(),
+        "guilds/One/links.toml",
+        "# Local comment\ntitle='Local'",
+    );
+    let config = config::load(dir.path()).unwrap();
+    let one = config.guild("one").unwrap();
+    let catalog = Catalog::new(&config);
+    let entry = catalog.snapshot(one.guild_id).await.unwrap().links.boards[0].links[0].clone();
+    let mut stale = entry.clone();
+    stale.title = "Old title".into();
+    assert!(
+        catalog
+            .remove_link(&config.root, one, "default", stale)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("guilds/One/links.toml")).unwrap(),
+        "# Local comment\ntitle='Local'"
+    );
+    catalog
+        .remove_link(&config.root, one, "default", entry)
+        .await
+        .unwrap();
+    let content = fs::read_to_string(dir.path().join("guilds/One/links.toml")).unwrap();
+    assert!(content.contains("# Local comment"));
+    assert!(content.contains("entries = []"));
+    let reloaded = config::load(dir.path()).unwrap();
+    assert!(
+        reloaded.guild("one").unwrap().link_boards.as_ref().unwrap()[0]
+            .links
+            .is_empty()
+    );
+    assert_eq!(
+        reloaded.guild("two").unwrap().link_boards.as_ref().unwrap()[0]
+            .links
+            .len(),
+        1
     );
 }
 
@@ -766,6 +889,11 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
             Document {
                 title: "Original".into(),
                 description: "Body".into(),
+                entries: if kind == "links" {
+                    vec![link("discord", "https://discord.gg/EXEMPLO")]
+                } else {
+                    vec![]
+                },
                 ..Default::default()
             }
         };
@@ -799,6 +927,11 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
         let state = store.read(gid).unwrap();
         assert_eq!(state.publications[key].message.get(), 100);
         assert_eq!(state.documents.contains_key(key), kind == "announcements");
+        if kind == "links" {
+            assert_eq!(state.link_invites[key].url, "https://discord.gg/EXEMPLO");
+            plan.document.entries[0].url = "https://discord.com/invite/OUTRO".into();
+            plan.operation = 124;
+        }
         plan.revision = state.revision;
         plan.document.title = "Updated".into();
         if kind == "announcements" {
@@ -816,6 +949,16 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
             store.read(gid).unwrap().publications[key].message.get(),
             100
         );
+        if kind == "links" {
+            assert_eq!(
+                store.read(gid).unwrap().link_invites[key].url,
+                "https://discord.com/invite/OUTRO"
+            );
+            assert_eq!(
+                store.read(gid).unwrap().link_invites[key].custom_id,
+                "links-copy:124"
+            );
+        }
         plan.revision = store.read(gid).unwrap().revision;
         plan.action = "remove".into();
         plan.delete = true;
@@ -835,6 +978,22 @@ async fn managed_publications_create_edit_remove_and_reject_duplicate_confirmati
             serde_json::json!([])
         );
         assert_eq!(records[2].1["embeds"][0]["title"], "Updated");
+        if kind == "links" {
+            assert_eq!(
+                records[0].1["components"][0]["components"][0]["custom_id"],
+                "links-copy:123"
+            );
+            assert_eq!(
+                records[2].1["components"][0]["components"][0]["custom_id"],
+                "links-copy:124"
+            );
+            assert_eq!(
+                records[2].1["components"][0]["components"][1]["url"],
+                "https://discord.com/invite/OUTRO"
+            );
+            assert_eq!(records[2].1["embeds"].as_array().unwrap().len(), 1);
+            assert!(!store.read(gid).unwrap().link_invites.contains_key(key));
+        }
         if kind == "rules" {
             for request in [&records[0], &records[2]] {
                 assert_eq!(request.1["embeds"].as_array().unwrap().len(), 1);

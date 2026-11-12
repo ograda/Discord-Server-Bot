@@ -2,7 +2,7 @@ use crate::{
     core::{Context, Error, permissions},
     modules::actions::{AnnouncementAction, LinksAction, RulesAction},
     services::{
-        content::{Document, Entry},
+        content::Document,
         publishing::{self as p, Plan},
         ui,
     },
@@ -88,110 +88,56 @@ pub async fn rules(
     collection(ctx, "rules", &action, None).await
 }
 
-#[derive(poise::Modal)]
-#[name = "Adicionar link ao quadro"]
-struct LinkForm {
-    #[name = "Identificador do link"]
-    #[max_length = 64]
-    id: String,
-    #[name = "Título"]
-    #[max_length = 200]
-    title: String,
-    #[name = "URL HTTP/HTTPS"]
-    #[max_length = 2048]
-    url: String,
-    #[name = "Descrição (opcional)"]
-    #[paragraph]
-    #[max_length = 900]
-    description: Option<String>,
-    #[name = "Emoji (opcional)"]
-    #[max_length = 32]
-    emoji: Option<String>,
-}
-
-/// Quadros de links: prévia por padrão; Add salva no TOML, sem publicar.
-#[allow(clippy::too_many_arguments)]
+/// Catálogo de Links: escolha explicitamente a ação; ID é usado somente em Remove.
 #[poise::command(
     slash_command,
     guild_only,
     ephemeral,
+    rename = "links",
     default_member_permissions = "MANAGE_MESSAGES"
 )]
-pub async fn links(
+async fn links_command(
     ctx: Context<'_>,
-    #[description = "Ação (padrão: preview)"] ação: Option<LinksAction>,
-    #[description = "Quadro de links"]
-    #[autocomplete = "board_autocomplete"]
-    quadro: Option<String>,
-    #[description = "Identificador do novo link"] id: Option<String>,
-    #[description = "Título do novo link"] titulo: Option<String>,
-    #[description = "URL HTTP/HTTPS, inclusive convites Discord"] url: Option<String>,
-    #[description = "Descrição do novo link"] descricao: Option<String>,
-    #[description = "Emoji do novo link"] emoji: Option<String>,
+    #[description = "Operação obrigatória do catálogo de Links"] ação: String,
+    #[description = "ID do link, somente para Remove"]
+    #[autocomplete = "link_autocomplete"]
+    id: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
     let cfg = permissions::guild_config(ctx)?;
-    let action = cfg.select_action(
-        "links",
-        ação.map(|v| v.as_str()),
-        ctx.data().config.global.modules,
-    )?;
-    let supplied: Vec<_> = [
-        ("quadro", quadro.is_some()),
-        ("id", id.is_some()),
-        ("titulo", titulo.is_some()),
-        ("url", url.is_some()),
-        ("descricao", descricao.is_some()),
-        ("emoji", emoji.is_some()),
-    ]
-    .into_iter()
-    .filter_map(|(k, v)| v.then_some(k))
-    .collect();
-    permissions::conditional_parameters("links", &action, &supplied)?;
-    if action != "add" {
-        return collection(ctx, "links", &action, quadro).await;
+    let action = cfg.select_action("links", Some(&ação), ctx.data().config.global.modules)?;
+    crate::modules::links::handle(ctx, &action, id).await
+}
+// Poise's derived choices use INTEGER indices. Links intentionally registers STRING values.
+pub fn links() -> poise::Command<crate::core::Data, Error> {
+    let mut command = links_command();
+    let action = command
+        .parameters
+        .iter_mut()
+        .find(|p| p.name == "ação")
+        .unwrap();
+    action.choices = <LinksAction as poise::ChoiceParameter>::list();
+    action.type_setter = Some(crate::services::links::action_option);
+    command
+}
+async fn link_autocomplete(ctx: Context<'_>, partial: &str) -> Vec<s::AutocompleteChoice> {
+    let Ok(cfg) = permissions::guild_config(ctx) else {
+        return vec![];
+    };
+    if !cfg.command_enabled("links.remove", ctx.data().config.global.modules)
+        || permissions::administrative(ctx, s::Permissions::MANAGE_MESSAGES)
+            .await
+            .is_err()
+    {
+        return vec![];
     }
-    permissions::action(ctx, "links", "add")?;
-    permissions::administrative(ctx, s::Permissions::MANAGE_MESSAGES).await?;
-    let Some(board) = select_board(ctx, quadro).await? else {
-        return Ok(());
+    let Ok(snapshot) = ctx.data().catalog.snapshot(cfg.guild_id).await else {
+        return vec![];
     };
-    let form = LinkForm {
-        id: id.unwrap_or_default(),
-        title: titulo.unwrap_or_default(),
-        url: url.unwrap_or_default(),
-        description: descricao,
-        emoji,
-    };
-    let form = if form.id.is_empty() || form.title.is_empty() || form.url.is_empty() {
-        let Some(form) = ui::open_form(ctx, form).await? else {
-            return Ok(());
-        };
-        form
-    } else {
-        form
-    };
-    let entry = Entry {
-        id: form.id,
-        title: form.title,
-        url: form.url,
-        description: form.description.unwrap_or_default(),
-        emoji: form.emoji.unwrap_or_default(),
-        order: 0,
-    };
-    let _guard = ctx.data().store.gate.lock().await;
-    permissions::action(ctx, "links", "add")?;
-    let (source, backup) = ctx
-        .data()
-        .catalog
-        .add_link(&ctx.data().config.root, cfg, &board.id, entry)
-        .await?;
-    tracing::info!(guild = %cfg.guild_id, module = "links", action = "add", stage = "toml_write", board = board.id, source, backup = ?backup, "Link salvo no TOML e memória atualizada");
-    ctx.say(format!("Link salvo no quadro `{}` em `{source}`; memória atualizada. Nada publicado. Use ação:publish para publicar.", board.id)).await?;
-    Ok(())
+    crate::services::links::autocomplete(&snapshot.links, partial)
 }
 
-async fn select_board(
+pub(crate) async fn select_board(
     ctx: Context<'_>,
     requested: Option<String>,
 ) -> Result<Option<crate::services::catalog::Board>, Error> {
@@ -199,6 +145,8 @@ async fn select_board(
     let snapshot = ctx.data().catalog.snapshot(cfg.guild_id).await?;
     let id = if let Some(id) = requested {
         id
+    } else if let Some(board) = crate::services::links::preferred_board(&snapshot.links.boards) {
+        board.id.clone()
     } else {
         let options = snapshot
             .links
@@ -220,41 +168,7 @@ async fn select_board(
             .context("Board ID não encontrado nesta guilda; selecione um quadro disponível")?,
     ))
 }
-async fn board_autocomplete(ctx: Context<'_>, partial: &str) -> Vec<s::AutocompleteChoice> {
-    let Ok(cfg) = permissions::guild_config(ctx) else {
-        return vec![];
-    };
-    if !cfg.command_enabled("links", ctx.data().config.global.modules)
-        || permissions::administrative(ctx, s::Permissions::MANAGE_MESSAGES)
-            .await
-            .is_err()
-    {
-        return vec![];
-    }
-    let Ok(snapshot) = ctx.data().catalog.snapshot(cfg.guild_id).await else {
-        return vec![];
-    };
-    snapshot
-        .links
-        .boards
-        .into_iter()
-        .filter(|b| {
-            b.id.contains(partial) || b.title.to_lowercase().contains(&partial.to_lowercase())
-        })
-        .take(25)
-        .map(|b| {
-            s::AutocompleteChoice::new(
-                format!("{} — {}", b.title, b.id)
-                    .chars()
-                    .take(100)
-                    .collect::<String>(),
-                b.id,
-            )
-        })
-        .collect()
-}
-
-async fn collection(
+pub(crate) async fn collection(
     ctx: Context<'_>,
     kind: &'static str,
     action: &str,

@@ -1,6 +1,6 @@
 # Guia de comandos — V1.1
 
-Não há subcomandos reais. `/role` e `/role-all` exigem `ação`; os comandos com
+Não há subcomandos reais. `/role`, `/role-all` e `/links` exigem `ação`; os comandos com
 ação padrão usam uma escolha opcional `ação`. Ping utiliza `modo`. Não há `/status`, `/announcements`,
 `/profile show`, `/profile apply` ou subcomandos nativos em Rules/Links.
 A lista de choices é filtrada por guilda. Uma ação padrão desligada não é
@@ -12,7 +12,7 @@ substituída silenciosamente: selecione explicitamente outra permitida.
 | `/role` | Nenhum; três parâmetros obrigatórios | `ação:add/remove`, `usuário` USER, `cargo` ROLE |
 | `/role-all` | Nenhum; confirmação obrigatória | `ação:add/remove`, `cargo` ROLE; sem usuário |
 | `/rules` | `preview` | `ação:preview`, `publish`, `update`, `reset`, `remove` |
-| `/links` | `preview` | `ação:preview`, `publish`, `update`, `reset`, `add`, `remove` |
+| `/links` | Nenhum; ação obrigatória | `ação:preview`, `publish`, `update`, `reset`, `add`, `remove`; somente `id` opcional |
 | `/announcement` | `create` | `ação:create`, `edit`, `remove` |
 | `/announce` | Enviar embed | Não possui ação |
 | `/profile` | `revert` | `ação:revert`, `nickname`, `bio`, `avatar` |
@@ -45,23 +45,27 @@ Board ID identifica o quadro; `boards.links.id` identifica um link dentro dele.
 `channels.custom`. IDs numéricos de canal, guilda e mensagem têm responsabilidades
 separadas. Não mude o Board ID se deseja manter sua associação operacional.
 
-`/links` mostra o único quadro automaticamente; se houver vários, abre um menu
-paginado. `quadro` também aceita autocomplete por título/ID. Publish e Remove
-operam somente no quadro escolhido e pedem confirmação. Remove preserva o catálogo.
-Update recarrega o arquivo inteiro; Reset restaura os defaults com backup.
-
-Exemplo de Add direto:
+`/links ação:preview` mostra o único quadro ou o quadro `default`; sem um padrão
+inequívoco, abre um menu privado. O slash command possui somente `ação` obrigatória
+e `id` opcional. ID é ignorado fora de Remove. Exemplos:
 
 ```text
-/links ação:add quadro:importantes id:convite titulo:"Convite da comunidade" url:"https://discord.gg/convite"
+/links ação:add
+/links ação:remove id:whatsapp
 ```
 
-`descricao` e `emoji` são opcionais. Se faltar `id`, `titulo` ou `url`, o bot abre
-um formulário nativo com esses campos. O formulário contém apenas texto; não usa
-upload de arquivo em modal. URLs HTTP/HTTPS são aceitas, inclusive `discord.gg`.
-A mudança é validada e salva em `links.toml`, com backup; atualiza a memória sem
-publicar. Use Publish depois. Outros quadros e comentários são preservados quando
-possível; formatos inline podem ser normalizados, mantendo o backup original.
+Add abre, pelo botão privado Preencher formulário, o modal com ID, Título,
+Descrição opcional, URL e Emoji opcional. Mostra prévia com Salvar/Cancelar e grava
+somente no TOML específico, com backup e memória atualizada, sem publicar.
+Remove oferece autocomplete/seleção dos links e confirmação; exclui somente a
+entrada do TOML, preservando quadro, outras entradas e Message IDs.
+
+Publish apresenta Editar/Publicar/Cancelar; confirmar cria ou atualiza a mesma
+mensagem. Update recarrega o arquivo inteiro; Reset restaura defaults com backup.
+O embed único apresenta links na mesma linha dos títulos, com `label` opcional
+(padrão Abrir link). O convite `kind="discord_invite"`, também detectado pelas
+URLs oficiais, aparece por último com botões de cópia manual privada e abertura
+direta. Veja [formatação, persistência e homologação](links.md).
 
 O formato antigo `title`, `description`, `[[entries]]` vira um quadro `default`.
 Sua chave de publicação `links` continua válida. Ao adotar `[[boards]]`, o registro
@@ -113,7 +117,8 @@ retry cego de alterações de perfil. A confirmação da API antecede a persist�
 ## Permissões, parâmetros e recuperação
 
 Todos os parâmetros condicionais são opcionais no registro. A ação selecionada
-valida quais podem ser usados; parâmetros de outra ação são rejeitados. Não deixe
+valida quais podem ser usados; parâmetros de outra ação são rejeitados, com a
+exceção de `id` em Links, que é ignorado fora de Remove. Não deixe
 `imagem` preenchida ao executar Revert, por exemplo.
 
 Rules, Links e anúncios exigem Gerenciar Mensagens; Profile exige Gerenciar
@@ -122,8 +127,10 @@ continuam valendo. As permissões de canal são verificadas para o bot, permitin
 uso por um administrador autorizado que não possa escrever diretamente no destino.
 
 Se uma publicação sumiu do Discord, Publish preserva suas referências e informa
-404. Execute Remove e confirme para reconciliar somente aquele registro antes
-de publicar de novo. Se `pending` indicar resultado HTTP incerto, confira o canal
+404. Em Rules e Announcement, Execute Remove e confirme para reconciliar aquele
+registro. Links Remove gerencia entradas do catálogo; uma publicação ausente de
+Links exige reconciliação operacional dos IDs com backup do estado, sem apagar
+o catálogo ou o JSON completo. Se `pending` indicar resultado HTTP incerto, confira o canal
 e o estado antes de qualquer repetição; mantenha backups e não apague o JSON.
 
 ## Cargos individuais e em massa
